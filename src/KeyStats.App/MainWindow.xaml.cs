@@ -39,7 +39,7 @@ public partial class MainWindow : Window
     private bool _startupSettingChanging;
     private SettingsStore? _settingsStore;
     private AppSettings? _settings;
-    private string _activeRangePreset = "Today";
+    private TimeRangePreset _activeRangePreset = TimeRangePreset.Today;
     private (long StartUtc, long EndUtc)? _selectedRange;
     private ulong[] _selectedCounts = new ulong[KeyCatalog.Count];
     private ulong[] _selectedStoredCounts = new ulong[KeyCatalog.Count];
@@ -177,8 +177,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        _activeRangePreset = item.Tag as string ?? "Today";
-        var isCustom = _activeRangePreset == "Custom";
+        _activeRangePreset = item.Tag is string tag && Enum.TryParse<TimeRangePreset>(tag, out var preset)
+            ? preset
+            : TimeRangePreset.Today;
+        var isCustom = _activeRangePreset == TimeRangePreset.Custom;
         SetRangeEditorsEnabled(isCustom);
         RangeValidationText.Text = string.Empty;
         if (!isCustom)
@@ -204,21 +206,13 @@ public partial class MainWindow : Window
 
             var startLocal = DateTime.SpecifyKind(startDate.Date + startTime, DateTimeKind.Unspecified);
             var endLocal = DateTime.SpecifyKind(endDate.Date + endTime, DateTimeKind.Unspecified);
-            if (TenMinuteSnapCheckBox.IsChecked == true)
-            {
-                startLocal = AlignLocalDown(startLocal, 10);
-                endLocal = AlignLocalUp(endLocal, 10);
-            }
-
-            var startUtc = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(startLocal, TimeZoneInfo.Local), TimeSpan.Zero);
-            var endUtc = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(endLocal, TimeZoneInfo.Local), TimeSpan.Zero);
-            var range = (TimeBuckets.ToMinuteStart(startUtc), TimeBuckets.ToMinuteStart(endUtc));
-            if (range.Item2 <= range.Item1)
+            var range = TimeRangeCalculator.ForCustom(startLocal, endLocal, TenMinuteSnapCheckBox.IsChecked == true);
+            if (range.EndUtc <= range.StartUtc)
             {
                 throw new InvalidOperationException("结束时间必须晚于开始时间。");
             }
 
-            _activeRangePreset = "Custom";
+            _activeRangePreset = TimeRangePreset.Custom;
             _selectedRange = range;
             RangeValidationText.Text = string.Empty;
             await RefreshSelectedRangeAsync(force: true);
@@ -268,28 +262,16 @@ public partial class MainWindow : Window
         await RefreshSelectedRangeAsync(force: true);
     }
 
-    private async Task<(long StartUtc, long EndUtc)> ResolvePresetRangeAsync(string preset)
+    private async Task<(long StartUtc, long EndUtc)> ResolvePresetRangeAsync(TimeRangePreset preset)
     {
-        var currentMinute = TimeBuckets.ToMinuteStart(DateTimeOffset.UtcNow);
-        var endUtc = currentMinute + TimeBuckets.MinuteSeconds;
-        return preset switch
+        // 只有「全部」需要读库拿历史边界，其余预设是纯计算，交给 TimeRangeCalculator。
+        StoredDataRange? storedRange = null;
+        if (preset == TimeRangePreset.All && _repository is not null)
         {
-            "Recent10" => (endUtc - TimeBuckets.TenMinuteSeconds, endUtc),
-            "Recent7Days" => (endUtc - (7 * 24 * 60 * TimeBuckets.MinuteSeconds), endUtc),
-            "Recent30Days" => (endUtc - (30 * 24 * 60 * TimeBuckets.MinuteSeconds), endUtc),
-            "All" => await ResolveAllRangeAsync(currentMinute, endUtc),
-            _ => GetTodayRangeUtc(),
-        };
-    }
+            storedRange = await _repository.GetDataRangeAsync(_lifetimeCancellation.Token);
+        }
 
-    private async Task<(long StartUtc, long EndUtc)> ResolveAllRangeAsync(long currentMinute, long currentEnd)
-    {
-        var storedRange = _repository is null
-            ? null
-            : await _repository.GetDataRangeAsync(_lifetimeCancellation.Token);
-        return storedRange is null
-            ? (currentMinute, currentEnd)
-            : (Math.Min(storedRange.StartUtc, currentMinute), Math.Max(storedRange.EndUtc, currentEnd));
+        return TimeRangeCalculator.ForPreset(preset, DateTimeOffset.Now, storedRange);
     }
 
     private void SetRangeEditorValues((long StartUtc, long EndUtc) range)
@@ -300,15 +282,6 @@ public partial class MainWindow : Window
         StartTimeComboBox.Text = startLocal.ToString("HH:mm", CultureInfo.InvariantCulture);
         EndDatePicker.SelectedDate = endLocal.Date;
         EndTimeComboBox.Text = endLocal.ToString("HH:mm", CultureInfo.InvariantCulture);
-    }
-
-    private static DateTime AlignLocalDown(DateTime value, int minutes) =>
-        new(value.Year, value.Month, value.Day, value.Hour, value.Minute - (value.Minute % minutes), 0, DateTimeKind.Unspecified);
-
-    private static DateTime AlignLocalUp(DateTime value, int minutes)
-    {
-        var aligned = AlignLocalDown(value, minutes);
-        return aligned == value ? aligned : aligned.AddMinutes(minutes);
     }
 
     private HeatScaleMode GetScaleMode() =>
@@ -639,7 +612,7 @@ public partial class MainWindow : Window
                 : string.Empty;
             StorageStatusText.Text = $"本地数据：Data\\key-stats.db · 上次保存 {savedText} · {sizeMegabytes:F2} MB{errorText}";
             _lastStorageUiRefresh = DateTimeOffset.UtcNow;
-            if (_activeRangePreset != "Custom")
+            if (_activeRangePreset != TimeRangePreset.Custom)
             {
                 _selectedRange = await ResolvePresetRangeAsync(_activeRangePreset);
                 SetRangeEditorValues(_selectedRange.Value);
@@ -862,14 +835,6 @@ public partial class MainWindow : Window
         var start = DateTimeOffset.FromUnixTimeSeconds(range.StartUtc).ToLocalTime();
         var end = DateTimeOffset.FromUnixTimeSeconds(range.EndUtc).ToLocalTime();
         return $"{start:yyyy-MM-dd HH:mm} — {end:yyyy-MM-dd HH:mm}（结束不含）";
-    }
-
-    private static (long StartUtc, long EndUtc) GetTodayRangeUtc()
-    {
-        var localStart = TimeZoneInfo.ConvertTimeToUtc(DateTime.Today, TimeZoneInfo.Local);
-        var startUtc = TimeBuckets.ToMinuteStart(new DateTimeOffset(localStart, TimeSpan.Zero));
-        var currentMinute = TimeBuckets.ToMinuteStart(DateTimeOffset.UtcNow);
-        return (startUtc, currentMinute + TimeBuckets.MinuteSeconds);
     }
 
     private void FilterChanged(object sender, RoutedEventArgs eventArgs) => _rowsView.Refresh();

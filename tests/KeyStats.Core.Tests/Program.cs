@@ -36,6 +36,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("同一分钟重启后继续累计", RecorderResumesCurrentMinuteAsync),
     ("CSV 导出包含分钟与键位", CsvExportContainsMinuteRowsAsync),
     ("设置文件可原子创建和读取", SettingsStoreRoundTripsAsync),
+    ("预设范围按本地零点与固定长度计算", Sync(PresetRangesUseLocalDayStart)),
+    ("全部范围并入历史数据边界", Sync(AllRangeMergesStoredBounds)),
+    ("自定义范围按十分钟向外对齐", Sync(CustomRangeSnapsToTenMinutes)),
 };
 
 var failures = new List<string>();
@@ -569,6 +572,62 @@ static async Task<string> ReadScalarAsync(Microsoft.Data.Sqlite.SqliteConnection
     command.CommandText = commandText;
     return Convert.ToString(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture) ?? string.Empty;
 }
+
+static void PresetRangesUseLocalDayStart()
+{
+    var zone = FixedZone();
+    var localNow = new DateTimeOffset(2026, 11, 16, 15, 30, 45, TimeSpan.FromHours(8));
+    var minuteEnd = new DateTimeOffset(2026, 11, 16, 15, 31, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds();
+
+    var today = TimeRangeCalculator.ForPreset(TimeRangePreset.Today, localNow, timeZone: zone);
+    Equal(new DateTimeOffset(2026, 11, 16, 0, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds(), today.StartUtc);
+    Equal(minuteEnd, today.EndUtc);
+
+    var recent10 = TimeRangeCalculator.ForPreset(TimeRangePreset.Recent10, localNow, timeZone: zone);
+    Equal(minuteEnd - 600L, recent10.StartUtc);
+    Equal(minuteEnd, recent10.EndUtc);
+
+    var recent7Days = TimeRangeCalculator.ForPreset(TimeRangePreset.Recent7Days, localNow, timeZone: zone);
+    Equal(minuteEnd - (7L * 24 * 60 * 60), recent7Days.StartUtc);
+
+    var recent30Days = TimeRangeCalculator.ForPreset(TimeRangePreset.Recent30Days, localNow, timeZone: zone);
+    Equal(minuteEnd - (30L * 24 * 60 * 60), recent30Days.StartUtc);
+}
+
+static void AllRangeMergesStoredBounds()
+{
+    var zone = FixedZone();
+    var localNow = new DateTimeOffset(2026, 11, 16, 15, 30, 45, TimeSpan.FromHours(8));
+    var minuteStart = new DateTimeOffset(2026, 11, 16, 15, 30, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds();
+    var minuteEnd = minuteStart + 60;
+
+    var withoutData = TimeRangeCalculator.ForPreset(TimeRangePreset.All, localNow, timeZone: zone);
+    Equal(minuteStart, withoutData.StartUtc);
+    Equal(minuteEnd, withoutData.EndUtc);
+
+    var stored = new StoredDataRange(minuteStart - 86_400, minuteStart - 3_600);
+    var merged = TimeRangeCalculator.ForPreset(TimeRangePreset.All, localNow, stored, zone);
+    Equal(minuteStart - 86_400, merged.StartUtc);
+    Equal(minuteEnd, merged.EndUtc);
+}
+
+static void CustomRangeSnapsToTenMinutes()
+{
+    var zone = FixedZone();
+    var start = new DateTime(2026, 11, 16, 9, 7, 0, DateTimeKind.Unspecified);
+    var end = new DateTime(2026, 11, 16, 10, 3, 0, DateTimeKind.Unspecified);
+
+    var snapped = TimeRangeCalculator.ForCustom(start, end, alignToTenMinutes: true, zone);
+    Equal(new DateTimeOffset(2026, 11, 16, 9, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds(), snapped.StartUtc);
+    Equal(new DateTimeOffset(2026, 11, 16, 10, 10, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds(), snapped.EndUtc);
+
+    var exact = TimeRangeCalculator.ForCustom(start, end, alignToTenMinutes: false, zone);
+    Equal(new DateTimeOffset(2026, 11, 16, 9, 7, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds(), exact.StartUtc);
+    Equal(new DateTimeOffset(2026, 11, 16, 10, 3, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds(), exact.EndUtc);
+}
+
+static TimeZoneInfo FixedZone() =>
+    TimeZoneInfo.CreateCustomTimeZone("KeyStats.Tests+08", TimeSpan.FromHours(8), "Tests+08", "Tests+08");
 
 static async Task WithRepositoryAsync(Func<string, KeyStatsRepository, Task> test)
 {
