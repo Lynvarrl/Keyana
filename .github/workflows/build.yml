@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # 允许在仓库页面手动触发，方便首次接入时先验证流水线再合并。
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build-and-test:
@@ -13,10 +18,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 版本号以 global.json 为唯一来源（当前要求 10.0.400 + rollForward: latestPatch）。
+      # 之前写死 dotnet-version: 10.0.x，会装最新的 10.0 SDK；一旦上游发布 10.0.5xx，
+      # 就不再满足 global.json 的同功能带约束，restore 会直接失败。
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
 
       - name: Restore
         run: dotnet restore .\KeyStats.slnx
@@ -26,4 +34,3 @@ jobs:
 
       - name: Run regression tests
         run: dotnet run --project .\tests\KeyStats.Core.Tests -c Release --no-build
-
