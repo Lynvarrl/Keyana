@@ -77,6 +77,10 @@ scripts/                    发行包构建脚本
 
 项目使用 Microsoft.Data.Sqlite 和 SQLitePCLRaw。详情见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
+## 代码来源与致谢
+
+1.0.0 版本由 B 站 UP 主[马猴少年源神](https://space.bilibili.com/2870557)编写，属于 AI 辅助（vibe coding）产出。1.1.x 起的改动在其基础上完成，作者的授权原话是「随便用，我也是 vibe 的」。感谢原作者的工作。
+
 ## 许可证
 
 本项目采用 MIT 许可证，详见 [LICENSE](LICENSE)。
