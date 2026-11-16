@@ -79,5 +79,5 @@ scripts/                    发行包构建脚本
 
 ## 许可证
 
-正式公开前需要由项目所有者选择并添加 `LICENSE` 文件。
+本项目采用 MIT 许可证，详见 [LICENSE](LICENSE)。
 
