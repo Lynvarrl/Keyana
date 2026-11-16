@@ -54,6 +54,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        Title = $"KeyStats v{AppInfo.Version} · 键盘与鼠标使用统计";
+
         _startupRegistration = new StartupRegistrationService(
             Environment.ProcessPath ?? throw new InvalidOperationException("无法确定 KeyStats 可执行文件路径。"));
         InitializeStartupSetting();
