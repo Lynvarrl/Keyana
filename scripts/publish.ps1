@@ -7,8 +7,8 @@ $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $artifactsRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $OutputDirectory))
 $projectPath = Join-Path $repositoryRoot "src\KeyStats.App\KeyStats.App.csproj"
 $readmePath = Join-Path $repositoryRoot "docs\USER_GUIDE.md"
-$fullOutput = Join-Path $artifactsRoot "v1.0-full"
-$liteOutput = Join-Path $artifactsRoot "v1.0-lite"
+$fullOutput = Join-Path $artifactsRoot "v1.1.1-full"
+$liteOutput = Join-Path $artifactsRoot "v1.1.1-lite"
 
 New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
 foreach ($target in @($fullOutput, $liteOutput)) {
@@ -43,8 +43,8 @@ dotnet publish $projectPath -c Release -r win-x64 --self-contained false `
 New-Item -ItemType Directory -Path (Join-Path $liteOutput "Data") -Force | Out-Null
 Copy-Item -LiteralPath $readmePath -Destination (Join-Path $liteOutput "README.md")
 
-$fullZip = Join-Path $artifactsRoot "KeyStats-V1.0-full-win-x64.zip"
-$liteZip = Join-Path $artifactsRoot "KeyStats-V1.0-lite-win-x64.zip"
+$fullZip = Join-Path $artifactsRoot "KeyStats-V1.1.1-full-win-x64.zip"
+$liteZip = Join-Path $artifactsRoot "KeyStats-V1.1.1-lite-win-x64.zip"
 Compress-Archive -Path (Join-Path $fullOutput "*") -DestinationPath $fullZip -CompressionLevel Optimal -Force
 Compress-Archive -Path (Join-Path $liteOutput "*") -DestinationPath $liteZip -CompressionLevel Optimal -Force
 

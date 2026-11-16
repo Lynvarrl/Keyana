@@ -33,7 +33,7 @@ dotnet run --project .\tests\KeyStats.Core.Tests -c Release --no-build
 
 脚本会生成：
 
-- `KeyStats-V1.0-full-win-x64.zip`：包含 .NET 桌面运行时；
-- `KeyStats-V1.0-lite-win-x64.zip`：依赖 x64 .NET 10 Desktop Runtime；
+- `KeyStats-V1.1.1-full-win-x64.zip`：包含 .NET 桌面运行时；
+- `KeyStats-V1.1.1-lite-win-x64.zip`：依赖 x64 .NET 10 Desktop Runtime；
 - `SHA256SUMS.txt`：两个 ZIP 的 SHA-256。
 

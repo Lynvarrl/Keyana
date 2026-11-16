@@ -23,7 +23,7 @@ public sealed class TenMinuteTimelineControl : Grid
             var endMinutes = (index + 1) * 10;
             var segment = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(239, 242, 246)),
+                Background = new SolidColorBrush(HeatPaletteColors.EmptyColor),
                 BorderBrush = index % 6 == 0
                     ? new SolidColorBrush(Color.FromRgb(167, 181, 196))
                     : new SolidColorBrush(Color.FromRgb(250, 251, 252)),
@@ -56,7 +56,7 @@ public sealed class TenMinuteTimelineControl : Grid
         Children.Add(labels);
     }
 
-    public void SetData(IReadOnlyList<ulong> counts)
+    public void SetData(IReadOnlyList<ulong> counts, HeatPalette palette = HeatPalette.BlueMagenta)
     {
         if (counts.Count != SegmentCount)
         {
@@ -67,8 +67,9 @@ public sealed class TenMinuteTimelineControl : Grid
         for (var index = 0; index < SegmentCount; index++)
         {
             var count = counts[index];
+            // 时段图固定使用平方根强度映射，颜色则与键盘热力图共用同一套配色，随选项联动。
             var intensity = maximum == 0 ? 0d : Math.Sqrt(count / (double)maximum);
-            _segmentVisuals[index].Background = new SolidColorBrush(GetHeatColor(count, intensity));
+            _segmentVisuals[index].Background = new SolidColorBrush(HeatPaletteColors.GetColor(palette, count, intensity));
             _segmentVisuals[index].ToolTip =
                 $"{FormatTime(index * 10)}—{FormatTime((index + 1) * 10)}\n输入次数：{count:N0}";
         }
@@ -82,29 +83,5 @@ public sealed class TenMinuteTimelineControl : Grid
         }
 
         return $"{totalMinutes / 60:00}:{totalMinutes % 60:00}";
-    }
-
-    private static Color GetHeatColor(ulong count, double intensity)
-    {
-        if (count == 0)
-        {
-            return Color.FromRgb(239, 242, 246);
-        }
-
-        var low = Color.FromRgb(218, 235, 249);
-        var middle = Color.FromRgb(91, 151, 211);
-        var high = Color.FromRgb(235, 139, 57);
-        return intensity <= 0.58
-            ? Interpolate(low, middle, intensity / 0.58)
-            : Interpolate(middle, high, (intensity - 0.58) / 0.42);
-    }
-
-    private static Color Interpolate(Color start, Color end, double amount)
-    {
-        amount = Math.Clamp(amount, 0, 1);
-        return Color.FromRgb(
-            (byte)Math.Round(start.R + ((end.R - start.R) * amount)),
-            (byte)Math.Round(start.G + ((end.G - start.G) * amount)),
-            (byte)Math.Round(start.B + ((end.B - start.B) * amount)));
     }
 }

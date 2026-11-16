@@ -11,6 +11,12 @@ public enum HeatScaleMode
     Linear,
 }
 
+public enum HeatPalette
+{
+    BlueMagenta,
+    GreenAmber,
+}
+
 public sealed class KeyboardHeatmapControl : Viewbox
 {
     private const double Unit = 48;
@@ -35,7 +41,7 @@ public sealed class KeyboardHeatmapControl : Viewbox
         BuildKeyboard(canvas);
     }
 
-    public void SetData(IReadOnlyList<ulong> counts, IReadOnlySet<KeyId> pressedKeys, HeatScaleMode scaleMode)
+    public void SetData(IReadOnlyList<ulong> counts, IReadOnlySet<KeyId> pressedKeys, HeatScaleMode scaleMode, HeatPalette palette = HeatPalette.BlueMagenta)
     {
         if (counts.Count != KeyCatalog.Count)
         {
@@ -62,7 +68,7 @@ public sealed class KeyboardHeatmapControl : Viewbox
                 intensity = Math.Sqrt(intensity);
             }
 
-            visual.Border.Background = new SolidColorBrush(GetHeatColor(count, intensity));
+            visual.Border.Background = new SolidColorBrush(HeatPaletteColors.GetColor(palette, count, intensity));
             visual.Border.BorderBrush = pressedKeys.Contains(keyId)
                 ? new SolidColorBrush(Color.FromRgb(33, 103, 184))
                 : new SolidColorBrush(Color.FromRgb(206, 214, 223));
@@ -195,30 +201,6 @@ public sealed class KeyboardHeatmapControl : Viewbox
     }
 
     private static KeySpec K(KeyId id, string label, double width = 1) => new(id, label, width);
-
-    private static Color GetHeatColor(ulong count, double intensity)
-    {
-        if (count == 0)
-        {
-            return Color.FromRgb(247, 248, 250);
-        }
-
-        var low = Color.FromRgb(218, 235, 249);
-        var middle = Color.FromRgb(91, 151, 211);
-        var high = Color.FromRgb(235, 139, 57);
-        return intensity <= 0.58
-            ? Interpolate(low, middle, intensity / 0.58)
-            : Interpolate(middle, high, (intensity - 0.58) / 0.42);
-    }
-
-    private static Color Interpolate(Color start, Color end, double amount)
-    {
-        amount = Math.Clamp(amount, 0, 1);
-        return Color.FromRgb(
-            (byte)Math.Round(start.R + ((end.R - start.R) * amount)),
-            (byte)Math.Round(start.G + ((end.G - start.G) * amount)),
-            (byte)Math.Round(start.B + ((end.B - start.B) * amount)));
-    }
 
     private sealed record KeyCapVisual(Border Border, TextBlock NameText, TextBlock CountText);
 

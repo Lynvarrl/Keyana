@@ -10,6 +10,8 @@ public sealed class AppSettings
 
     public int? RetentionDays { get; set; }
 
+    public string HeatPalette { get; set; } = "BlueMagenta";
+
     public void Validate()
     {
         if (Version != 1)

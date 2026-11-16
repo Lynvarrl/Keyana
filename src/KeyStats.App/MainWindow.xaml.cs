@@ -37,6 +37,8 @@ public partial class MainWindow : Window
     private bool _closeCompleted;
     private bool _rangeControlsReady;
     private bool _startupSettingChanging;
+    private SettingsStore? _settingsStore;
+    private AppSettings? _settings;
     private string _activeRangePreset = "Today";
     private (long StartUtc, long EndUtc)? _selectedRange;
     private ulong[] _selectedCounts = new ulong[KeyCatalog.Count];
@@ -45,6 +47,8 @@ public partial class MainWindow : Window
     private uint[]? _lastLiveCounts;
     private long? _selectedLiveBucketStart;
     private HashSet<KeyId> _lastVisualPressed = [];
+    private HeatPalette _currentPalette = HeatPalette.BlueMagenta;
+    private bool _paletteReady;
 
     public MainWindow()
     {
@@ -69,8 +73,8 @@ public partial class MainWindow : Window
         PopulateTimeChoices();
         _rangeControlsReady = true;
         SetRangeEditorsEnabled(isCustom: false);
-        HeatmapKeyboard.SetData(_selectedCounts, new HashSet<KeyId>(), HeatScaleMode.SquareRoot);
-        DailyTimeline.SetData(_selectedStoredTimeCounts);
+        HeatmapKeyboard.SetData(_selectedCounts, new HashSet<KeyId>(), HeatScaleMode.SquareRoot, _currentPalette);
+        DailyTimeline.SetData(_selectedStoredTimeCounts, _currentPalette);
 
         _refreshTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
@@ -313,7 +317,73 @@ public partial class MainWindow : Window
             : HeatScaleMode.SquareRoot;
 
     private void RenderHeatmap(IReadOnlySet<KeyId> pressedKeys) =>
-        HeatmapKeyboard.SetData(_selectedCounts, pressedKeys, GetScaleMode());
+        HeatmapKeyboard.SetData(_selectedCounts, pressedKeys, GetScaleMode(), _currentPalette);
+
+    private HeatPalette GetPalette() =>
+        PaletteComboBox.SelectedItem is ComboBoxItem { Tag: "GreenAmber" }
+            ? HeatPalette.GreenAmber
+            : HeatPalette.BlueMagenta;
+
+    private void PaletteComboBox_SelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
+    {
+        if (!_paletteReady)
+        {
+            return;
+        }
+
+        _currentPalette = GetPalette();
+        UpdateGradientBar();
+        RenderHeatmap(_counter.GetSnapshot().PressedKeys);
+        // 配色同时作用于时段热力图：按当前范围重算并重绘，使其与键盘热力图同步切换。
+        _ = RefreshSelectedRangeAsync(force: true);
+        _ = SavePaletteAsync();
+    }
+
+    private void UpdateGradientBar()
+    {
+        var brush = new LinearGradientBrush
+        {
+            StartPoint = new System.Windows.Point(0, 0.5),
+            EndPoint = new System.Windows.Point(1, 0.5),
+        };
+        var stops = _currentPalette == HeatPalette.GreenAmber
+            ? new[]
+            {
+                (0.00, Color.FromRgb(247, 248, 250)),
+                (0.30, Color.FromRgb(140, 210, 150)),
+                (0.60, Color.FromRgb(110, 183, 80)),
+                (1.00, Color.FromRgb(225, 130, 50)),
+            }
+            : new[]
+            {
+                (0.00, Color.FromRgb(247, 248, 250)),
+                (0.30, Color.FromRgb(140, 185, 235)),
+                (0.60, Color.FromRgb(108, 120, 208)),
+                (1.00, Color.FromRgb(215, 75, 140)),
+            };
+        foreach (var (offset, color) in stops)
+        {
+            brush.GradientStops.Add(new GradientStop(color, offset));
+        }
+        GradientBar.Background = brush;
+    }
+
+    private async Task SavePaletteAsync()
+    {
+        if (_settingsStore is null || _settings is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _settings.HeatPalette = _currentPalette.ToString();
+            await _settingsStore.SaveAsync(_settings, _lifetimeCancellation.Token);
+        }
+        catch (Exception) when (!_isClosing)
+        {
+        }
+    }
 
     private void PauseButton_Click(object sender, RoutedEventArgs eventArgs)
     {
@@ -491,6 +561,23 @@ public partial class MainWindow : Window
         var dataDirectory = Path.Combine(AppContext.BaseDirectory, "Data");
         var settingsStore = new SettingsStore(Path.Combine(dataDirectory, "settings.json"));
         var settings = await settingsStore.LoadOrCreateAsync(cancellationToken);
+        _settingsStore = settingsStore;
+        _settings = settings;
+
+        if (Enum.TryParse<HeatPalette>(settings.HeatPalette, out var savedPalette))
+        {
+            _currentPalette = savedPalette;
+            for (var i = 0; i < PaletteComboBox.Items.Count; i++)
+            {
+                if (PaletteComboBox.Items[i] is ComboBoxItem { Tag: string tag } && tag == savedPalette.ToString())
+                {
+                    PaletteComboBox.SelectedIndex = i;
+                    break;
+                }
+            }
+        }
+        _paletteReady = true;
+        UpdateGradientBar();
 
         var repository = new KeyStatsRepository(Path.Combine(dataDirectory, "key-stats.db"));
         try
@@ -696,7 +783,7 @@ public partial class MainWindow : Window
             _rowsView.Refresh();
         }
 
-        DailyTimeline.SetData(timeCounts);
+        DailyTimeline.SetData(timeCounts, _currentPalette);
         var peakCount = timeCounts.Max();
         if (peakCount == 0)
         {
