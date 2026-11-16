@@ -172,6 +172,7 @@ public partial class MainWindow
 
             ApplySelectedCounts(displayCounts, displayTimeCounts);
             await RefreshRangeMetricsAsync(range);
+            await RefreshActivityUiAsync();
             var pressedKeys = _counter.GetSnapshot().PressedKeys;
             RenderHeatmap(pressedKeys);
             HeatmapRangeText.Text = FormatRange(range);
@@ -207,22 +208,131 @@ public partial class MainWindow
             TimeZoneInfo.Local,
             _lifetimeCancellation.Token);
 
+        _rangeActiveMinutes = daily.TotalActiveMinutes;
+        UsageDurationText.Text = FormatDuration(_rangeActiveMinutes, _durationUsesDays);
+    }
+
+    /// <summary>
+    /// 主统计范围每两秒会刷新一次，但每日活跃区间是独立的，没必要跟着重扫一遍几十天的
+    /// 分钟数据：只把「与主范围重合的日期」重画一遍即可。数据本身按低频节奏刷新，
+    /// 保证跨天或长时间挂机后柱子仍然是最新的。
+    /// </summary>
+    private async Task RefreshActivityUiAsync()
+    {
+        if (DateTimeOffset.UtcNow - _lastActivityUiRefresh < TimeSpan.FromSeconds(60))
+        {
+            var (start, end) = SelectedRangeLocalDates();
+            ActivityStrip.SetHighlight(start, end);
+            return;
+        }
+
+        await RefreshActivityMetricsAsync();
+    }
+
+    /// <summary>
+    /// 每日活跃区间的指标与柱状图。这个区间独立于主统计范围：
+    /// 主范围只有一天时，「活跃天数」仍然应该看近 30 天，否则永远是 0 或 1。
+    /// </summary>
+    private async Task RefreshActivityMetricsAsync()
+    {
+        if (_repository is null || _activityRange is not { } range)
+        {
+            return;
+        }
+
+        var daily = await _repository.QueryDailyUsageAsync(
+            range.StartUtc,
+            range.EndUtc,
+            TimeZoneInfo.Local,
+            _lifetimeCancellation.Token);
+
+        var label = ActivityRangeLabel();
         ActiveDaysText.Text = daily.ActiveDays.ToString("N0");
         FireDaysText.Text = daily.FireDays.ToString("N0");
-        UsageDurationText.Text = FormatDuration(daily.TotalActiveMinutes);
-        ActiveDaysHintText.Text = daily.DayCount == 0
-            ? "暂无数据"
-            : $"共 {daily.DayCount} 天 · 火热 {daily.FireDays} 天";
+        ActiveDaysHintText.Text = $"{label} · ≥325 次/天";
+        FireDaysHintText.Text = $"{label} · ≥7999 次/天";
 
         // 区间很长时只画最后 90 天，否则会生成几千根柱子，既慢又看不清。
         var days = daily.Days;
         var shown = days.Count > 90 ? days.Skip(days.Count - 90).ToArray() : days;
-        ActivityStrip.SetData(shown);
+        var highlight = SelectedRangeLocalDates();
+        ActivityStrip.SetData(shown, highlight.Start, highlight.End);
         ActivitySummaryText.Text = shown.Count == 0
             ? "所选区间暂无数据"
             : days.Count > 90
-                ? $"最近 90 天（区间共 {days.Count} 天）"
+                ? $"最近 90 天（共 {days.Count} 天）"
                 : $"{shown[0].Date:MM-dd} — {shown[^1].Date:MM-dd} · 共 {shown.Count} 天";
+        _lastActivityUiRefresh = DateTimeOffset.UtcNow;
+    }
+
+    private void InitializeActivityDefaults()
+    {
+        var range = TimeRangeCalculator.ForPreset(TimeRangePreset.Recent30Days, DateTimeOffset.Now);
+        _activityRange = range;
+        ActivityRangePicker.SetRangeUtc(range.StartUtc, range.EndUtc);
+        ActivitySummaryText.Text = $"{FormatRangeShort(range)} · 每日活跃区间";
+    }
+
+    private async void ActivityRangePicker_RangeApplied(object? sender, EventArgs eventArgs)
+    {
+        var range = TimeRangeCalculator.ForCustom(
+            ActivityRangePicker.RangeStart,
+            ActivityRangePicker.RangeEnd,
+            _settings?.SnapToTenMinutes ?? true);
+
+        if (range.EndUtc <= range.StartUtc)
+        {
+            return;
+        }
+
+        _activityRange = range;
+        _activityPreset = TimeRangePreset.Custom;
+        ActivityRangePicker.SetRangeUtc(range.StartUtc, range.EndUtc);
+        await RefreshActivityMetricsAsync();
+    }
+
+    private string ActivityRangeLabel() => _activityPreset switch
+    {
+        TimeRangePreset.Today => "今日",
+        TimeRangePreset.Yesterday => "昨日",
+        TimeRangePreset.Recent7Days => "近 7 天",
+        TimeRangePreset.Recent30Days => "近 30 天",
+        TimeRangePreset.All => "全部",
+        _ => "自定义区间",
+    };
+
+    private (DateOnly? Start, DateOnly? End) SelectedRangeLocalDates()
+    {
+        if (_selectedRange is not { } range)
+        {
+            return (null, null);
+        }
+
+        return (
+            DateOnly.FromDateTime(DateTimeOffset.FromUnixTimeSeconds(range.StartUtc).ToLocalTime().DateTime),
+            DateOnly.FromDateTime(DateTimeOffset.FromUnixTimeSeconds(range.EndUtc - 1).ToLocalTime().DateTime));
+    }
+
+    private void UsageDurationCard_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs eventArgs)
+    {
+        if (eventArgs.ClickCount != 2)
+        {
+            return;
+        }
+
+        _durationUsesDays = !_durationUsesDays;
+        UpdateDurationTexts();
+        eventArgs.Handled = true;
+    }
+
+    private void UpdateDurationTexts()
+    {
+        UsageDurationText.Text = FormatDuration(_rangeActiveMinutes, _durationUsesDays);
+        AnalysisDurationText.Text = FormatDuration(_analysisActiveMinutes, _durationUsesDays);
+        // 不足一天时两种单位显示结果相同，hint 里把当前模式写出来，双击才有反馈。
+        var mode = _durationUsesDays ? "最大单位 天（双击切换）" : "最大单位 小时（双击切换）";
+        UsageDurationHintText.Text = $"所选范围 · {mode}";
+        AnalysisDurationHintText.Text = $"所选区间 · {mode}";
     }
 
     private bool RefreshLiveSelectedCounts()
@@ -265,8 +375,16 @@ public partial class MainWindow
 
         MouseLeftText.Text = counts[(int)KeyId.MouseLeftButton].ToString("N0");
         MouseRightText.Text = counts[(int)KeyId.MouseRightButton].ToString("N0");
+        MouseMiddleText.Text = counts[(int)KeyId.MouseMiddleButton].ToString("N0");
         WheelUpText.Text = counts[(int)KeyId.MouseWheelUp].ToString("N0");
         WheelDownText.Text = counts[(int)KeyId.MouseWheelDown].ToString("N0");
+        var mouseTotal = checked(
+            counts[(int)KeyId.MouseLeftButton] +
+            counts[(int)KeyId.MouseRightButton] +
+            counts[(int)KeyId.MouseMiddleButton] +
+            counts[(int)KeyId.MouseWheelUp] +
+            counts[(int)KeyId.MouseWheelDown]);
+        MouseTotalText.Text = mouseTotal.ToString("N0");
 
         foreach (var row in _rows)
         {
@@ -409,7 +527,7 @@ public partial class MainWindow
             ? "24:00"
             : $"{totalMinutes / 60:00}:{totalMinutes % 60:00}";
 
-    private static string FormatDuration(int minutes)
+    private static string FormatDuration(int minutes, bool useDays)
     {
         if (minutes <= 0)
         {
@@ -421,16 +539,29 @@ public partial class MainWindow
             return $"{minutes} 分";
         }
 
-        if (minutes < 24 * 60)
+        var hours = minutes / 60;
+        var rest = minutes % 60;
+
+        // 小时模式始终以小时为最大单位；天模式在不足 24 小时时也用小时，超过才进位。
+        if (!useDays || hours < 24)
         {
-            var hours = minutes / 60;
-            var rest = minutes % 60;
             return rest == 0 ? $"{hours} 小时" : $"{hours} 小时 {rest} 分";
         }
 
-        var days = minutes / (24 * 60);
-        var remainingHours = (minutes % (24 * 60)) / 60;
-        return remainingHours == 0 ? $"{days} 天" : $"{days} 天 {remainingHours} 小时";
+        var days = hours / 24;
+        var remainingHours = hours % 24;
+        var text = $"{days} 天";
+        if (remainingHours > 0)
+        {
+            text += $" {remainingHours} 小时";
+        }
+
+        if (rest > 0)
+        {
+            text += $" {rest} 分";
+        }
+
+        return text;
     }
 
     private static string FormatRange((long StartUtc, long EndUtc) range)

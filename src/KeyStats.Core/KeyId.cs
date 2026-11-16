@@ -32,4 +32,5 @@ public enum KeyId
     // 只能在枚举末尾追加，保证已有数据库中的键位下标保持不变。
     MouseLeftButton, MouseRightButton,
     MouseWheelUp, MouseWheelDown,
+    MouseMiddleButton,
 }

@@ -38,7 +38,8 @@ public static class KeyCatalog
             return "扩展键";
         }
 
-        if (id is KeyId.MouseLeftButton or KeyId.MouseRightButton or KeyId.MouseWheelUp or KeyId.MouseWheelDown)
+        if (id is KeyId.MouseLeftButton or KeyId.MouseRightButton or KeyId.MouseMiddleButton or
+            KeyId.MouseWheelUp or KeyId.MouseWheelDown)
         {
             return "鼠标";
         }
@@ -126,6 +127,7 @@ public static class KeyCatalog
         KeyId.Oem102 => "OEM 102",
         KeyId.MouseLeftButton => "鼠标左键",
         KeyId.MouseRightButton => "鼠标右键",
+        KeyId.MouseMiddleButton => "鼠标中键",
         KeyId.MouseWheelUp => "滚轮上",
         KeyId.MouseWheelDown => "滚轮下",
         _ => id.ToString(),

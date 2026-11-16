@@ -10,7 +10,7 @@ namespace KeyStats.App;
 
 public partial class MainWindow
 {
-    private void Nav_Checked(object sender, RoutedEventArgs eventArgs)
+    private async void Nav_Checked(object sender, RoutedEventArgs eventArgs)
     {
         if (!_uiReady || sender is not RadioButton { Tag: string tag })
         {
@@ -24,13 +24,10 @@ public partial class MainWindow
 
         if (tag == "Analysis")
         {
-            // 默认的「最近 30 天」跟着当前时间走；用户自己选过区间后就不再覆盖。
-            if (!_analysisRangeIsCustom)
+            // 相对预设（今日/近7日/近30日）跟着当前时间走；自定义区间保持用户选的值。
+            if (_analysisPreset != TimeRangePreset.Custom)
             {
-                var range = TimeRangeCalculator.ForPreset(TimeRangePreset.Recent30Days, DateTimeOffset.Now);
-                _analysisRange = range;
-                AnalysisRangePicker.SetRangeUtc(range.StartUtc, range.EndUtc);
-                AnalysisRangeHintText.Text = $"{FormatRangeShort(range)} · 独立于概览页";
+                await SyncAnalysisRangeFromPresetAsync();
             }
 
             _ = RefreshAnalysisAsync(force: true);

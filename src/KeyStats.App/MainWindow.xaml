@@ -175,19 +175,21 @@
                                 <TextBlock x:Name="ActiveDaysHintText" Text="每天 ≥325 次" Style="{StaticResource CaptionText}" Margin="0,2,0,0" />
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource CardStyle}" Padding="16,14" Margin="0,0,10,0">
+                        <Border x:Name="UsageDurationCard" Style="{StaticResource CardStyle}" Padding="16,14" Margin="0,0,10,0"
+                                Cursor="Hand" ToolTip="双击切换显示单位：天 / 小时"
+                                MouseLeftButtonDown="UsageDurationCard_MouseLeftButtonDown">
                             <StackPanel>
                                 <TextBlock Text="使用时长" Style="{StaticResource MetricLabelText}" />
                                 <TextBlock x:Name="UsageDurationText" Text="0 分" Style="{StaticResource MetricValueText}" Margin="0,4,0,0" />
-                                <TextBlock x:Name="UsageDurationHintText" Text="有输入的分钟累计" Style="{StaticResource CaptionText}"
-                                           Margin="0,2,0,0" TextWrapping="Wrap" />
+                                <TextBlock x:Name="UsageDurationHintText" Text="所选范围 · 最大单位 天（双击切换）"
+                                           Style="{StaticResource CaptionText}" Margin="0,2,0,0" TextWrapping="Wrap" />
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource CardStyle}" Padding="16,14" Margin="0,0,10,0">
                             <StackPanel>
                                 <TextBlock Text="火热日" Style="{StaticResource MetricLabelText}" />
                                 <TextBlock x:Name="FireDaysText" Text="0" Style="{StaticResource MetricValueText}" Margin="0,4,0,0" />
-                                <TextBlock Text="每天 ≥7999 次" Style="{StaticResource CaptionText}" Margin="0,2,0,0" />
+                                <TextBlock x:Name="FireDaysHintText" Text="每天 ≥7999 次" Style="{StaticResource CaptionText}" Margin="0,2,0,0" />
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource CardStyle}" Padding="16,14" Margin="0,0,10,0">
@@ -312,7 +314,7 @@
                             <StackPanel>
                                 <TextBlock Text="鼠标与滚轮" Style="{StaticResource CardTitleText}" />
                                 <TextBlock Text="与键盘共用同一套分钟聚合" Style="{StaticResource CaptionText}" Margin="0,3,0,0" />
-                                <UniformGrid Columns="2" Rows="2" Margin="0,14,0,0">
+                                <UniformGrid Columns="3" Rows="2" Margin="0,14,-7,0">
                                     <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
                                         <StackPanel>
                                             <TextBlock Text="左键" Style="{StaticResource CaptionText}" />
@@ -320,7 +322,14 @@
                                                        FontWeight="SemiBold" Margin="0,3,0,0" />
                                         </StackPanel>
                                     </Border>
-                                    <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,0,7">
+                                    <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
+                                        <StackPanel>
+                                            <TextBlock Text="中键" Style="{StaticResource CaptionText}" />
+                                            <TextBlock x:Name="MouseMiddleText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
+                                                       FontWeight="SemiBold" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
                                         <StackPanel>
                                             <TextBlock Text="右键" Style="{StaticResource CaptionText}" />
                                             <TextBlock x:Name="MouseRightText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
@@ -334,10 +343,17 @@
                                                        FontWeight="SemiBold" Margin="0,3,0,0" />
                                         </StackPanel>
                                     </Border>
-                                    <Border Style="{StaticResource InnerTileStyle}">
+                                    <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,7,0">
                                         <StackPanel>
                                             <TextBlock Text="滚轮下" Style="{StaticResource CaptionText}" />
                                             <TextBlock x:Name="WheelDownText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
+                                                       FontWeight="SemiBold" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,7,0">
+                                        <StackPanel>
+                                            <TextBlock Text="合计" Style="{StaticResource CaptionText}" />
+                                            <TextBlock x:Name="MouseTotalText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
                                                        FontWeight="SemiBold" Margin="0,3,0,0" />
                                         </StackPanel>
                                     </Border>
@@ -350,30 +366,28 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
-                                <Grid>
+                                <StackPanel>
+                                    <TextBlock Text="每日活跃" Style="{StaticResource CardTitleText}" />
+                                    <TextBlock Text="柱内颜色 = 当天时段 · 淡蓝底 = 主统计范围"
+                                               Style="{StaticResource CaptionText}" Margin="0,3,0,0" />
+                                </StackPanel>
+
+                                <Grid Grid.Row="1" Margin="0,12,0,0">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <StackPanel>
-                                        <TextBlock Text="每日活跃" Style="{StaticResource CardTitleText}" />
-                                        <TextBlock x:Name="ActivitySummaryText" Text="最近 30 天"
-                                                   Style="{StaticResource CaptionText}" Margin="0,3,0,0" />
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                        <Border Width="9" Height="9" CornerRadius="3" Background="{DynamicResource ActivityInactiveBrush}"
-                                                VerticalAlignment="Center" Margin="0,0,5,0" />
-                                        <TextBlock Text="普通" Style="{StaticResource CaptionText}" Margin="0,0,12,0" />
-                                        <Border Width="9" Height="9" CornerRadius="3" Background="{DynamicResource ActivityActiveBrush}"
-                                                VerticalAlignment="Center" Margin="0,0,5,0" />
-                                        <TextBlock Text="活跃 ≥325" Style="{StaticResource CaptionText}" Margin="0,0,12,0" />
-                                        <Border Width="9" Height="9" CornerRadius="3" Background="{DynamicResource ActivityFireBrush}"
-                                                VerticalAlignment="Center" Margin="0,0,5,0" />
-                                        <TextBlock Text="火热 ≥7999" Style="{StaticResource CaptionText}" />
-                                    </StackPanel>
+                                    <controls:DateRangePicker x:Name="ActivityRangePicker"
+                                                              RangeApplied="ActivityRangePicker_RangeApplied" />
+                                    <TextBlock x:Name="ActivitySummaryText" Grid.Column="1" Text="最近 30 天"
+                                               Style="{StaticResource CaptionText}"
+                                               HorizontalAlignment="Right" VerticalAlignment="Center"
+                                               Margin="12,0,0,0" TextTrimming="CharacterEllipsis" />
                                 </Grid>
-                                <controls:DailyActivityControl x:Name="ActivityStrip" Grid.Row="1" Margin="2,16,2,0" />
+
+                                <controls:DailyActivityControl x:Name="ActivityStrip" Grid.Row="2" Margin="2,14,2,0" />
                             </Grid>
                         </Border>
                     </Grid>
@@ -424,9 +438,26 @@
                             <TextBlock x:Name="AnalysisRangeHintText" Text="独立统计区间，不影响概览页"
                                        Style="{StaticResource BodySecondaryText}" Margin="0,4,0,0" />
                         </StackPanel>
-                        <controls:DateRangePicker Grid.Column="1" x:Name="AnalysisRangePicker"
-                                                  VerticalAlignment="Center"
-                                                  RangeApplied="AnalysisRangePicker_RangeApplied" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                            <RadioButton x:Name="AnalysisPresetAll" Content="全部" Tag="All"
+                                         GroupName="AnalysisRangePreset" Style="{StaticResource ChipStyle}"
+                                         Checked="AnalysisPresetChip_Checked" />
+                            <RadioButton x:Name="AnalysisPresetRecent30Days" Content="近 30 日" Tag="Recent30Days"
+                                         GroupName="AnalysisRangePreset" Style="{StaticResource ChipStyle}"
+                                         IsChecked="True" Checked="AnalysisPresetChip_Checked" />
+                            <RadioButton x:Name="AnalysisPresetRecent7Days" Content="近 7 日" Tag="Recent7Days"
+                                         GroupName="AnalysisRangePreset" Style="{StaticResource ChipStyle}"
+                                         Checked="AnalysisPresetChip_Checked" />
+                            <RadioButton x:Name="AnalysisPresetYesterday" Content="昨日" Tag="Yesterday"
+                                         GroupName="AnalysisRangePreset" Style="{StaticResource ChipStyle}"
+                                         Checked="AnalysisPresetChip_Checked" />
+                            <RadioButton x:Name="AnalysisPresetToday" Content="今日" Tag="Today"
+                                         GroupName="AnalysisRangePreset" Style="{StaticResource ChipStyle}"
+                                         Checked="AnalysisPresetChip_Checked" />
+                            <controls:DateRangePicker x:Name="AnalysisRangePicker"
+                                                      Margin="8,0,0,0"
+                                                      RangeApplied="AnalysisRangePicker_RangeApplied" />
+                        </StackPanel>
                     </Grid>
 
                     <UniformGrid Grid.Row="1" Columns="4" Margin="0,18,-10,0">
@@ -451,11 +482,14 @@
                                 <TextBlock Text="每天 ≥325 次" Style="{StaticResource CaptionText}" Margin="0,2,0,0" />
                             </StackPanel>
                         </Border>
-                        <Border Style="{StaticResource CardStyle}" Padding="16,14" Margin="0,0,10,0">
+                        <Border x:Name="AnalysisDurationCard" Style="{StaticResource CardStyle}" Padding="16,14" Margin="0,0,10,0"
+                                Cursor="Hand" ToolTip="双击切换显示单位：天 / 小时"
+                                MouseLeftButtonDown="UsageDurationCard_MouseLeftButtonDown">
                             <StackPanel>
                                 <TextBlock Text="使用时长" Style="{StaticResource MetricLabelText}" />
                                 <TextBlock x:Name="AnalysisDurationText" Text="0 分" Style="{StaticResource MetricValueText}" Margin="0,4,0,0" />
-                                <TextBlock Text="有输入的分钟累计" Style="{StaticResource CaptionText}" Margin="0,2,0,0" />
+                                <TextBlock x:Name="AnalysisDurationHintText" Text="所选区间 · 最大单位 天（双击切换）"
+                                           Style="{StaticResource CaptionText}" Margin="0,2,0,0" TextWrapping="Wrap" />
                             </StackPanel>
                         </Border>
                     </UniformGrid>

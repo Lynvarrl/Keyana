@@ -16,12 +16,40 @@ public static class DailyUsageThresholds
 /// <see cref="ActiveMinuteCount"/> 是「当天有输入的分钟数」，作为使用时长的口径：
 /// 没有键鼠事件时无法判断用户是否还在电脑前，用它比用首末输入跨度更保守，也更稳定。
 /// </para>
+/// <para>
+/// <see cref="HourCounts"/> 是 0～23 点的逐小时输入量，用来在每日活跃图里画出
+/// 「这一天什么时候在用电脑」的分布，不影响任何指标口径。
+/// </para>
 /// </summary>
-public sealed record DailyUsage(DateOnly Date, ulong TotalCount, int ActiveMinuteCount)
+public sealed record DailyUsage(
+    DateOnly Date,
+    ulong TotalCount,
+    int ActiveMinuteCount,
+    IReadOnlyList<ulong> HourCounts)
 {
     public bool IsActive => TotalCount >= DailyUsageThresholds.Active;
 
     public bool IsFire => TotalCount >= DailyUsageThresholds.Fire;
+
+    /// <summary>最忙的一个小时；全天无输入时返回 -1。</summary>
+    public int PeakHour
+    {
+        get
+        {
+            var peak = -1;
+            var peakCount = 0UL;
+            for (var hour = 0; hour < HourCounts.Count; hour++)
+            {
+                if (HourCounts[hour] > peakCount)
+                {
+                    peakCount = HourCounts[hour];
+                    peak = hour;
+                }
+            }
+
+            return peak;
+        }
+    }
 }
 
 /// <summary>一段时间内的逐日汇总，附带常用聚合值。</summary>

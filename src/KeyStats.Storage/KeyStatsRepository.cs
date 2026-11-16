@@ -289,7 +289,7 @@ public sealed class KeyStatsRepository : IDisposable
     {
         ValidateRange(startUtc, endUtc);
         var zone = timeZone ?? TimeZoneInfo.Local;
-        var perDay = new Dictionary<DateOnly, (ulong Total, int Minutes)>();
+        var perDay = new Dictionary<DateOnly, DayAccumulator>();
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
@@ -310,8 +310,19 @@ public sealed class KeyStatsRepository : IDisposable
                 zone);
             var date = DateOnly.FromDateTime(localTime.DateTime);
 
-            perDay.TryGetValue(date, out var existing);
-            perDay[date] = (checked(existing.Total + total), existing.Minutes + (total > 0 ? 1 : 0));
+            if (!perDay.TryGetValue(date, out var accumulator))
+            {
+                accumulator = new DayAccumulator();
+                perDay[date] = accumulator;
+            }
+
+            accumulator.Total = checked(accumulator.Total + total);
+            if (total > 0)
+            {
+                accumulator.Minutes++;
+            }
+
+            accumulator.Hours[localTime.Hour] = checked(accumulator.Hours[localTime.Hour] + total);
         }
 
         // 没有任何输入的日子不会产生分钟行，但日均和使用时长要按自然日跨度算，
@@ -320,12 +331,24 @@ public sealed class KeyStatsRepository : IDisposable
         var lastDate = LocalDate(endUtc - 1, zone);
         for (var date = firstDate; date <= lastDate; date = date.AddDays(1))
         {
-            perDay.TryAdd(date, (0, 0));
+            perDay.TryAdd(date, new DayAccumulator());
         }
 
         return DailyUsageSummary.From(perDay
             .OrderBy(pair => pair.Key)
-            .Select(pair => new DailyUsage(pair.Key, pair.Value.Total, pair.Value.Minutes)));
+            .Select(pair => new DailyUsage(
+                pair.Key,
+                pair.Value.Total,
+                pair.Value.Minutes,
+                pair.Value.Hours)));
+    }
+
+    /// <summary>逐日汇总的累加器；HourCounts 固定 24 项，避免每行都重建数组。</summary>
+    private sealed class DayAccumulator
+    {
+        public ulong Total;
+        public int Minutes;
+        public readonly ulong[] Hours = new ulong[24];
     }
 
     private static DateOnly LocalDate(long utcSeconds, TimeZoneInfo zone) =>

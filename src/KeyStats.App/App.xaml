@@ -221,7 +221,7 @@
                                 Background="{DynamicResource ChipBackgroundBrush}"
                                 BorderBrush="{DynamicResource ChipBorderBrush}"
                                 BorderThickness="1"
-                                CornerRadius="999"
+                                CornerRadius="10"
                                 Padding="13,6">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>

@@ -32,6 +32,7 @@ public partial class MainWindow : Window
     private DateTimeOffset _lastStorageUiRefresh = DateTimeOffset.MinValue;
     private DateTimeOffset _lastHeatmapUiRefresh = DateTimeOffset.MinValue;
     private DateTimeOffset _lastAnalysisUiRefresh = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastActivityUiRefresh = DateTimeOffset.MinValue;
     private bool _storageRefreshRunning;
     private bool _heatmapRefreshRunning;
     private bool _analysisRefreshRunning;
@@ -47,7 +48,13 @@ public partial class MainWindow : Window
     private TimeRangePreset _activeRangePreset = TimeRangePreset.Today;
     private (long StartUtc, long EndUtc)? _selectedRange;
     private (long StartUtc, long EndUtc)? _analysisRange;
-    private bool _analysisRangeIsCustom;
+    private (long StartUtc, long EndUtc)? _activityRange;
+    private TimeRangePreset _analysisPreset = TimeRangePreset.Recent30Days;
+    private TimeRangePreset _activityPreset = TimeRangePreset.Recent30Days;
+    private int _rangeActiveMinutes;
+    private int _analysisActiveMinutes;
+    private bool _durationUsesDays = true;
+    private bool _syncingAnalysisPresetChips;
     private ulong[] _selectedCounts = new ulong[KeyCatalog.Count];
     private ulong[] _selectedStoredCounts = new ulong[KeyCatalog.Count];
     private ulong[] _selectedDisplayTimeCounts = new ulong[TenMinuteTimelineControl.SegmentCount];
@@ -83,6 +90,8 @@ public partial class MainWindow : Window
         KeyChipList.ItemsSource = _rowsView;
 
         PopulateFontFamilyChoices();
+        UpdateDurationTexts();
+        InitializeActivityDefaults();
         InitializeAnalysisDefaults();
         HeatmapKeyboard.SetData(_selectedCounts, new HashSet<KeyId>(), _currentScaleMode, _currentPalette);
         DailyTimeline.SetData(_selectedDisplayTimeCounts, _currentPalette);
@@ -331,6 +340,12 @@ public partial class MainWindow : Window
             SaveNowButton.IsEnabled = true;
             ExportButton.IsEnabled = true;
             await RefreshStorageUiAsync(force: true);
+            // 启动瞬间如果已经点过预设，那时还没法读历史边界，这里按就绪后的数据重算一次。
+            if (_analysisPreset != TimeRangePreset.Custom)
+            {
+                await SyncAnalysisRangeFromPresetAsync();
+            }
+
             await RefreshAnalysisAsync(force: true);
         }
         catch

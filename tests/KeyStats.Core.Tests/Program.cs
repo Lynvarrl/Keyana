@@ -17,7 +17,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("组合键中的每个物理键分别计数", Sync(ChordKeysCountSeparately)),
     ("系统切换丢失松开消息后可恢复计数", Sync(SystemSwitchReleaseCanBeReconciled)),
     ("Alt+Tab 补偿与 Raw Input 不会重复计数", Sync(AltTabFallbackAndRawInputAreDeduplicated)),
-    ("鼠标左右键分别计数且按住不连发", Sync(MouseButtonsCountSeparately)),
+    ("鼠标左 / 中 / 右键分别计数且按住不连发", Sync(MouseButtonsCountSeparately)),
     ("暂停期间不计数且恢复不误计长按", Sync(PauseMaintainsPressedState)),
     ("清零不破坏按下状态", Sync(ClearDoesNotBreakPressedState)),
     ("界面清零可重置残留按下状态", Sync(ClearCanResetPressedState)),
@@ -43,7 +43,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("自定义范围按十分钟向外对齐", Sync(CustomRangeSnapsToTenMinutes)),
     ("滚轮增量按 120 单位累计成刻度", Sync(WheelAccumulatesToNotches)),
     ("滚轮脉冲可连续计数且不进入按下状态", Sync(WheelImpulseCountsRepeatedly)),
-    ("逐日汇总识别活跃日与火热日", DailyUsageMarksActiveAndFireDaysAsync),
+    ("逐日汇总识别活跃日、火热日与逐小时分布", DailyUsageMarksActiveAndFireDaysAsync),
     ("界面设置损坏时降级为默认值", UiSettingsFallBackToDefaultsAsync),
 };
 
@@ -216,12 +216,15 @@ static void MouseButtonsCountSeparately()
     Equal(true, counter.ProcessButton(9, KeyId.MouseLeftButton, isBreak: false).Counted);
     Equal(false, counter.ProcessButton(9, KeyId.MouseLeftButton, isBreak: false).Counted);
     counter.ProcessButton(9, KeyId.MouseRightButton, isBreak: false);
+    counter.ProcessButton(9, KeyId.MouseMiddleButton, isBreak: false);
 
     var heldSnapshot = counter.GetSnapshot();
     Equal(1L, heldSnapshot.Counts[(int)KeyId.MouseLeftButton]);
     Equal(1L, heldSnapshot.Counts[(int)KeyId.MouseRightButton]);
+    Equal(1L, heldSnapshot.Counts[(int)KeyId.MouseMiddleButton]);
     Equal(true, heldSnapshot.PressedKeys.Contains(KeyId.MouseLeftButton));
     Equal(true, heldSnapshot.PressedKeys.Contains(KeyId.MouseRightButton));
+    Equal(true, heldSnapshot.PressedKeys.Contains(KeyId.MouseMiddleButton));
 
     counter.ProcessButton(9, KeyId.MouseLeftButton, isBreak: true);
     counter.ProcessButton(9, KeyId.MouseLeftButton, isBreak: false);
@@ -742,6 +745,9 @@ static async Task DailyUsageMarksActiveAndFireDaysAsync()
         Equal(true, summary.Days[1].IsActive);
         Equal(false, summary.Days[2].IsActive);
         Equal(0UL, summary.Days[3].TotalCount);
+        Equal(24, summary.Days[0].HourCounts.Count);
+        Equal(7999UL, summary.Days[0].HourCounts[0]);
+        Equal(0, summary.Days[0].PeakHour);
     });
 }
 
