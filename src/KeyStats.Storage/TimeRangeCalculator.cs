@@ -4,6 +4,7 @@ namespace KeyStats.Storage;
 public enum TimeRangePreset
 {
     Today,
+    Yesterday,
     Recent10,
     Recent7Days,
     Recent30Days,
@@ -41,6 +42,7 @@ public static class TimeRangeCalculator
 
         return preset switch
         {
+            TimeRangePreset.Yesterday => Yesterday(zone, localNow),
             TimeRangePreset.Recent10 => (endUtc - TimeBuckets.TenMinuteSeconds, endUtc),
             TimeRangePreset.Recent7Days => (endUtc - (7L * 24 * 60 * TimeBuckets.MinuteSeconds), endUtc),
             TimeRangePreset.Recent30Days => (endUtc - (30L * 24 * 60 * TimeBuckets.MinuteSeconds), endUtc),
@@ -84,11 +86,28 @@ public static class TimeRangeCalculator
     private static (long StartUtc, long EndUtc) Today(TimeZoneInfo zone, DateTimeOffset localNow)
     {
         var local = TimeZoneInfo.ConvertTime(localNow, zone);
-        var dayStartLocal = new DateTime(local.Year, local.Month, local.Day, 0, 0, 0, DateTimeKind.Unspecified);
-        var dayStartUtc = new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(dayStartLocal, zone), TimeSpan.Zero);
+        var dayStartUtc = LocalMidnightUtc(zone, local.Date);
 
         var currentMinute = TimeBuckets.ToMinuteStart(new DateTimeOffset(localNow.UtcDateTime, TimeSpan.Zero));
         return (TimeBuckets.ToMinuteStart(dayStartUtc), currentMinute + TimeBuckets.MinuteSeconds);
+    }
+
+    /// <summary>
+    /// 昨天的完整自然日，左闭右开。两端分别按各自的本地零点换算，
+    /// 跨夏令时切换日也不会出现 23 或 25 小时的错位。
+    /// </summary>
+    private static (long StartUtc, long EndUtc) Yesterday(TimeZoneInfo zone, DateTimeOffset localNow)
+    {
+        var local = TimeZoneInfo.ConvertTime(localNow, zone);
+        var yesterdayStart = LocalMidnightUtc(zone, local.Date.AddDays(-1));
+        var todayStart = LocalMidnightUtc(zone, local.Date);
+        return (TimeBuckets.ToMinuteStart(yesterdayStart), TimeBuckets.ToMinuteStart(todayStart));
+    }
+
+    private static DateTimeOffset LocalMidnightUtc(TimeZoneInfo zone, DateTime localDate)
+    {
+        var midnightLocal = new DateTime(localDate.Year, localDate.Month, localDate.Day, 0, 0, 0, DateTimeKind.Unspecified);
+        return new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(midnightLocal, zone), TimeSpan.Zero);
     }
 
     private static DateTime AlignLocalDown(DateTime value, int minutes) =>

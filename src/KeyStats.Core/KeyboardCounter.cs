@@ -61,6 +61,29 @@ public sealed class KeyboardCounter
         return KeyProcessResult.RecognizedOnly(keyId);
     }
 
+    /// <summary>
+    /// 记录一次没有「按下 / 松开」语义的脉冲输入（滚轮刻度）。
+    ///
+    /// 滚轮每转一格都是一次独立输入，不能走 <see cref="ProcessButton"/> 的按下去重，
+    /// 否则连续滚动只会被记成一次；同时它也不应该出现在「当前按下中的键」里。
+    /// </summary>
+    public KeyProcessResult RecordImpulse(KeyId keyId)
+    {
+        if ((uint)keyId >= (uint)KeyCatalog.Count)
+        {
+            return KeyProcessResult.Unrecognized;
+        }
+
+        if (IsPaused)
+        {
+            return KeyProcessResult.RecognizedOnly(keyId);
+        }
+
+        Interlocked.Increment(ref _counts[(int)keyId]);
+        Interlocked.Increment(ref _totalCount);
+        return KeyProcessResult.CountedPress(keyId);
+    }
+
     public void SetPaused(bool paused) => Interlocked.Exchange(ref _isPaused, paused ? 1 : 0);
 
     public void ClearCounts(bool resetPressedState = false)

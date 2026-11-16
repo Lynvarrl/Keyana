@@ -7,7 +7,7 @@
     <RootNamespace>KeyStats.App</RootNamespace>
     <!-- 版本号只在这里维护：FileVersion / InformationalVersion 由 SDK 从这里派生，
          窗口标题由 AppInfo 在运行时读取，发布脚本也从本文件读取。 -->
-    <Version>1.1.1</Version>
+    <Version>1.2.0</Version>
     <ApplicationIcon>Assets\KeyStats.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>

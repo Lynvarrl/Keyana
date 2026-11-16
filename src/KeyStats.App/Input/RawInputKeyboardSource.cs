@@ -22,12 +22,14 @@ public sealed class RawInputKeyboardSource : IDisposable
     private const ushort RiMouseLeftButtonUp = 0x0002;
     private const ushort RiMouseRightButtonDown = 0x0004;
     private const ushort RiMouseRightButtonUp = 0x0008;
+    private const ushort RiMouseWheel = 0x0400;
 
     private readonly KeyboardCounter _counter;
     private readonly Action<KeyId>? _countedKeySink;
     private readonly HwndSource _windowSource;
     private readonly Timer _systemShortcutTimer;
     private readonly object _systemShortcutGate = new();
+    private readonly Dictionary<nint, WheelAccumulator> _wheelAccumulators = [];
     private int _unrecognizedMakeCount;
     private bool _sampledAltTabDown;
     private volatile bool _disposed;
@@ -164,6 +166,7 @@ public sealed class RawInputKeyboardSource : IDisposable
         Interlocked.Exchange(ref _unrecognizedMakeCount, 0);
         LastInputDescription = "等待键盘输入…";
         LastUnrecognizedDescription = null;
+        _wheelAccumulators.Clear();
     }
 
     private nint WindowProcedure(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
@@ -175,6 +178,7 @@ public sealed class RawInputKeyboardSource : IDisposable
         else if (message == WmInputDeviceChange && wParam == GidcRemoval)
         {
             _counter.RemoveDevice(lParam);
+            _wheelAccumulators.Remove(lParam);
         }
 
         // 保持 handled=false，让 WPF/DefWindowProc 完成 WM_INPUT 的系统清理。
@@ -247,6 +251,45 @@ public sealed class RawInputKeyboardSource : IDisposable
         var buttonFlags = rawInput.Data.Mouse.ButtonFlags;
         ProcessMouseButton(rawInput.Header.Device, buttonFlags, RiMouseLeftButtonDown, RiMouseLeftButtonUp, KeyId.MouseLeftButton);
         ProcessMouseButton(rawInput.Header.Device, buttonFlags, RiMouseRightButtonDown, RiMouseRightButtonUp, KeyId.MouseRightButton);
+        ProcessMouseWheel(rawInput.Header.Device, rawInput.Data.Mouse);
+    }
+
+    /// <summary>
+    /// 滚轮没有按下 / 松开语义：一条消息里可能带多格，高精度滚轮又会拆成小于 120 的增量。
+    /// 因此按设备累计余数，凑满一格记一次脉冲；上下方向分别计入不同键位。
+    /// </summary>
+    private void ProcessMouseWheel(nint deviceHandle, RawMouse mouse)
+    {
+        if ((mouse.ButtonFlags & RiMouseWheel) == 0)
+        {
+            return;
+        }
+
+        if (!_wheelAccumulators.TryGetValue(deviceHandle, out var accumulator))
+        {
+            accumulator = new WheelAccumulator();
+            _wheelAccumulators[deviceHandle] = accumulator;
+        }
+
+        var notches = accumulator.Add(mouse.WheelDelta);
+        if (notches == 0)
+        {
+            return;
+        }
+
+        var keyId = notches > 0 ? KeyId.MouseWheelUp : KeyId.MouseWheelDown;
+        var magnitude = Math.Abs(notches);
+        for (var notch = 0; notch < magnitude; notch++)
+        {
+            if (_counter.RecordImpulse(keyId).Counted)
+            {
+                _countedKeySink?.Invoke(keyId);
+            }
+        }
+
+        LastInputDescription = magnitude == 1
+            ? $"最近识别：{KeyCatalog.Get(keyId).DisplayName}"
+            : $"最近识别：{KeyCatalog.Get(keyId).DisplayName} × {magnitude}";
     }
 
     private void ProcessMouseButton(
@@ -375,6 +418,9 @@ public sealed class RawInputKeyboardSource : IDisposable
         public uint ExtraInformation;
 
         public ushort ButtonFlags => (ushort)(Buttons & 0xFFFF);
+
+        /// <summary>滚轮增量，位于 ulButtons 的高 16 位，按有符号 short 解释。</summary>
+        public short WheelDelta => unchecked((short)(Buttons >> 16));
     }
 
     [StructLayout(LayoutKind.Explicit)]

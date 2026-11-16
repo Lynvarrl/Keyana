@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using KeyStats.App.Theme;
 using KeyStats.Core;
 
 namespace KeyStats.App.Controls;
@@ -23,6 +24,11 @@ public sealed class KeyboardHeatmapControl : Viewbox
     private const double Gap = 4;
     private const double Step = Unit + Gap;
     private readonly Dictionary<KeyId, KeyCapVisual> _keyCaps = [];
+    private IReadOnlyList<ulong> _lastCounts = new ulong[KeyCatalog.Count];
+    private IReadOnlySet<KeyId> _lastPressed = new HashSet<KeyId>();
+    private HeatScaleMode _lastScaleMode = HeatScaleMode.SquareRoot;
+    private HeatPalette _lastPalette = HeatPalette.BlueMagenta;
+    private bool _themeHooked;
 
     public KeyboardHeatmapControl()
     {
@@ -39,6 +45,10 @@ public sealed class KeyboardHeatmapControl : Viewbox
         };
         Child = canvas;
         BuildKeyboard(canvas);
+
+        Loaded += (_, _) => HookTheme();
+        Unloaded += (_, _) => UnhookTheme();
+        HookTheme();
     }
 
     public void SetData(IReadOnlyList<ulong> counts, IReadOnlySet<KeyId> pressedKeys, HeatScaleMode scaleMode, HeatPalette palette = HeatPalette.BlueMagenta)
@@ -47,6 +57,20 @@ public sealed class KeyboardHeatmapControl : Viewbox
         {
             throw new ArgumentException("热力图计数向量长度不正确。", nameof(counts));
         }
+
+        _lastCounts = counts;
+        _lastPressed = pressedKeys;
+        _lastScaleMode = scaleMode;
+        _lastPalette = palette;
+        Render();
+    }
+
+    private void Render()
+    {
+        var counts = _lastCounts;
+        var pressedKeys = _lastPressed;
+        var scaleMode = _lastScaleMode;
+        var palette = _lastPalette;
 
         var displayedCounts = _keyCaps.Keys.Select(key => counts[(int)key]).ToArray();
         var maximum = displayedCounts.DefaultIfEmpty().Max();
@@ -59,6 +83,12 @@ public sealed class KeyboardHeatmapControl : Viewbox
             .Select((item, index) => (item.Key, Rank: index + 1))
             .ToDictionary(item => item.Key, item => item.Rank);
 
+        var weakText = new SolidColorBrush(ControlTheme.WeakText);
+        var emptyText = new SolidColorBrush(ControlTheme.EmptyLabel);
+        var strongText = new SolidColorBrush(ControlTheme.StrongText);
+        var cellBorder = new SolidColorBrush(ControlTheme.CellBorder);
+        var pressedBorder = new SolidColorBrush(ControlTheme.PressedBorder);
+
         foreach (var (keyId, visual) in _keyCaps)
         {
             var count = counts[(int)keyId];
@@ -68,24 +98,45 @@ public sealed class KeyboardHeatmapControl : Viewbox
                 intensity = Math.Sqrt(intensity);
             }
 
+            var isPressed = pressedKeys.Contains(keyId);
             visual.Border.Background = new SolidColorBrush(HeatPaletteColors.GetColor(palette, count, intensity));
-            visual.Border.BorderBrush = pressedKeys.Contains(keyId)
-                ? new SolidColorBrush(Color.FromRgb(33, 103, 184))
-                : new SolidColorBrush(Color.FromRgb(206, 214, 223));
-            visual.Border.BorderThickness = pressedKeys.Contains(keyId) ? new Thickness(2.5) : new Thickness(1);
+            visual.Border.BorderBrush = isPressed ? pressedBorder : cellBorder;
+            visual.Border.BorderThickness = isPressed ? new Thickness(2.5) : new Thickness(1);
             visual.CountText.Text = count.ToString("N0");
-            visual.CountText.Foreground = intensity >= 0.72
-                ? Brushes.White
-                : new SolidColorBrush(Color.FromRgb(35, 43, 52));
-            visual.NameText.Foreground = intensity >= 0.72
-                ? new SolidColorBrush(Color.FromRgb(255, 248, 238))
-                : new SolidColorBrush(Color.FromRgb(80, 90, 102));
+
+            var useStrongText = intensity >= 0.72;
+            visual.CountText.Foreground = useStrongText ? strongText : count == 0 ? emptyText : weakText;
+            visual.NameText.Foreground = useStrongText ? strongText : count == 0 ? emptyText : weakText;
 
             var percentage = total == 0 ? 0d : count * 100d / total;
             var rankText = ranks.TryGetValue(keyId, out var rank) ? rank.ToString() : "—";
             visual.Border.ToolTip = $"{KeyCatalog.Get(keyId).DisplayName}\n次数：{count:N0}\n占全部输入：{percentage:F2}%\n排名：{rankText}";
         }
     }
+
+    private void HookTheme()
+    {
+        if (_themeHooked)
+        {
+            return;
+        }
+
+        ThemeManager.ThemeChanged += OnThemeChanged;
+        _themeHooked = true;
+    }
+
+    private void UnhookTheme()
+    {
+        if (!_themeHooked)
+        {
+            return;
+        }
+
+        ThemeManager.ThemeChanged -= OnThemeChanged;
+        _themeHooked = false;
+    }
+
+    private void OnThemeChanged() => Render();
 
     private void BuildKeyboard(Canvas canvas)
     {
@@ -98,8 +149,6 @@ public sealed class KeyboardHeatmapControl : Viewbox
             K(KeyId.F9, "F9"), K(KeyId.F10, "F10"), K(KeyId.F11, "F11"), K(KeyId.F12, "F12"));
         AddSequence(canvas, 15.5, 0,
             K(KeyId.PrintScreen, "PrtSc"), K(KeyId.ScrollLock, "ScrLk"), K(KeyId.Pause, "Pause"));
-        Add(canvas, KeyId.MouseLeftButton, "鼠标左键", 20, 0, 1.7);
-        Add(canvas, KeyId.MouseRightButton, "鼠标右键", 21.7, 0, 1.7);
 
         AddSequence(canvas, 0, 1,
             K(KeyId.Grave, "`"), K(KeyId.Digit1, "1"), K(KeyId.Digit2, "2"), K(KeyId.Digit3, "3"),

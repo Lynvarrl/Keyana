@@ -38,8 +38,13 @@ var tests = new (string Name, Func<Task> Run)[]
     ("设置文件可原子创建和读取", SettingsStoreRoundTripsAsync),
     ("旧设置文件含未知字段仍可读取", LegacySettingsWithUnknownKeysStillLoadsAsync),
     ("预设范围按本地零点与固定长度计算", Sync(PresetRangesUseLocalDayStart)),
+    ("昨天范围覆盖完整本地自然日", Sync(YesterdayRangeCoversWholeLocalDay)),
     ("全部范围并入历史数据边界", Sync(AllRangeMergesStoredBounds)),
     ("自定义范围按十分钟向外对齐", Sync(CustomRangeSnapsToTenMinutes)),
+    ("滚轮增量按 120 单位累计成刻度", Sync(WheelAccumulatesToNotches)),
+    ("滚轮脉冲可连续计数且不进入按下状态", Sync(WheelImpulseCountsRepeatedly)),
+    ("逐日汇总识别活跃日与火热日", DailyUsageMarksActiveAndFireDaysAsync),
+    ("界面设置损坏时降级为默认值", UiSettingsFallBackToDefaultsAsync),
 };
 
 var failures = new List<string>();
@@ -656,6 +661,122 @@ static void CustomRangeSnapsToTenMinutes()
     Equal(new DateTimeOffset(2026, 11, 16, 9, 7, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds(), exact.StartUtc);
     Equal(new DateTimeOffset(2026, 11, 16, 10, 3, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds(), exact.EndUtc);
 }
+
+static void YesterdayRangeCoversWholeLocalDay()
+{
+    var zone = FixedZone();
+    var localNow = new DateTimeOffset(2026, 11, 16, 15, 30, 45, TimeSpan.FromHours(8));
+
+    var yesterday = TimeRangeCalculator.ForPreset(TimeRangePreset.Yesterday, localNow, timeZone: zone);
+    Equal(
+        new DateTimeOffset(2026, 11, 15, 0, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds(),
+        yesterday.StartUtc);
+    Equal(
+        new DateTimeOffset(2026, 11, 16, 0, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds(),
+        yesterday.EndUtc);
+
+    // 昨天与今天的边界必须首尾相接，不能重叠也不能留空。
+    var today = TimeRangeCalculator.ForPreset(TimeRangePreset.Today, localNow, timeZone: zone);
+    Equal(today.StartUtc, yesterday.EndUtc);
+}
+
+static void WheelAccumulatesToNotches()
+{
+    var accumulator = new WheelAccumulator();
+    Equal(0, accumulator.Add(60));
+    Equal(1, accumulator.Add(60));
+    Equal(0, accumulator.Add(119));
+    Equal(1, accumulator.Add(1));
+    Equal(-1, accumulator.Add(-120));
+    Equal(0, accumulator.Add(-30));
+    Equal(-1, accumulator.Add(-90));
+}
+
+static void WheelImpulseCountsRepeatedly()
+{
+    var counter = new KeyboardCounter();
+    Equal(true, counter.RecordImpulse(KeyId.MouseWheelUp).Counted);
+    Equal(true, counter.RecordImpulse(KeyId.MouseWheelUp).Counted);
+    Equal(2L, counter.GetSnapshot().Counts[(int)KeyId.MouseWheelUp]);
+    Equal(false, counter.GetSnapshot().PressedKeys.Contains(KeyId.MouseWheelUp));
+
+    counter.SetPaused(true);
+    Equal(false, counter.RecordImpulse(KeyId.MouseWheelDown).Counted);
+    counter.SetPaused(false);
+    Equal(true, counter.RecordImpulse(KeyId.MouseWheelDown).Counted);
+    Equal(1L, counter.GetSnapshot().Counts[(int)KeyId.MouseWheelDown]);
+}
+
+static async Task DailyUsageMarksActiveAndFireDaysAsync()
+{
+    await WithRepositoryAsync(async (_, repository) =>
+    {
+        var zone = FixedZone();
+        var firstDayLocal = new DateTime(2026, 11, 15, 0, 0, 0, DateTimeKind.Unspecified);
+        var firstDayUtc = new DateTimeOffset(
+            TimeZoneInfo.ConvertTimeToUtc(firstDayLocal, zone),
+            TimeSpan.Zero).ToUnixTimeSeconds();
+        var secondDayUtc = firstDayUtc + 86_400;
+        var thirdDayUtc = secondDayUtc + 86_400;
+
+        // 第一天：7999 次，刚好达到火热日。
+        await repository.UpsertMinuteBucketAsync(
+            new MinuteBucketSnapshot(firstDayUtc, NewCounts((KeyId.A, 7999))));
+        // 第二天：325 次分布在两分钟，活跃且时长 2 分钟。
+        await repository.UpsertMinuteBucketAsync(
+            new MinuteBucketSnapshot(secondDayUtc, NewCounts((KeyId.B, 200))));
+        await repository.UpsertMinuteBucketAsync(
+            new MinuteBucketSnapshot(secondDayUtc + 60, NewCounts((KeyId.B, 125))));
+        // 第三天：324 次，差一次不算活跃。
+        await repository.UpsertMinuteBucketAsync(
+            new MinuteBucketSnapshot(thirdDayUtc, NewCounts((KeyId.C, 324))));
+
+        var summary = await repository.QueryDailyUsageAsync(firstDayUtc, thirdDayUtc + (2 * 86_400), zone);
+        Equal(4, summary.DayCount);
+        Equal(1, summary.FireDays);
+        Equal(2, summary.ActiveDays);
+        Equal(4, summary.TotalActiveMinutes);
+        Equal(8648UL, summary.TotalCount);
+        Equal(2162d, summary.AveragePerDay);
+        Equal(true, summary.Days[0].IsFire);
+        Equal(true, summary.Days[1].IsActive);
+        Equal(false, summary.Days[2].IsActive);
+        Equal(0UL, summary.Days[3].TotalCount);
+    });
+}
+
+static async Task UiSettingsFallBackToDefaultsAsync()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var settingsPath = Path.Combine(directory, "settings.json");
+        await File.WriteAllTextAsync(
+            settingsPath,
+            """
+            {
+              "version": 1,
+              "flushIntervalSeconds": 30,
+              "heatPalette": "BlueMagenta",
+              "theme": "Neon",
+              "fontFamily": "   ",
+              "fontScale": 9
+            }
+            """);
+
+        var settings = await new SettingsStore(settingsPath).LoadOrCreateAsync();
+        Equal("System", settings.Theme);
+        Equal(1.0, settings.FontScale);
+        Equal(string.Empty, settings.FontFamily);
+        Equal(true, settings.SnapToTenMinutes);
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+
 
 static TimeZoneInfo FixedZone() =>
     TimeZoneInfo.CreateCustomTimeZone("KeyStats.Tests+08", TimeSpan.FromHours(8), "Tests+08", "Tests+08");

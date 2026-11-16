@@ -12,6 +12,31 @@ public sealed class SettingsStore(string settingsPath)
 
     public string SettingsPath { get; } = Path.GetFullPath(settingsPath);
 
+    /// <summary>
+    /// 同步读取一份设置快照，供启动阶段（窗口尚未创建）决定主题与字体。
+    /// 任何读取或解析失败都返回 null，由调用方回落到默认值——启动路径不能因为
+    /// 一个坏掉的设置文件而中断。
+    /// </summary>
+    public static AppSettings? TryLoad(string settingsPath)
+    {
+        try
+        {
+            if (!File.Exists(settingsPath))
+            {
+                return null;
+            }
+
+            var json = File.ReadAllText(settingsPath);
+            var settings = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions);
+            settings?.Validate();
+            return settings;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public async Task<AppSettings> LoadOrCreateAsync(CancellationToken cancellationToken = default)
     {
         if (!File.Exists(SettingsPath))

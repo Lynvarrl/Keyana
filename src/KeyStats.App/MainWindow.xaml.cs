@@ -1,16 +1,16 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
-using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
-using System.Windows.Interop;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
-using KeyStats.App.Input;
 using KeyStats.App.Controls;
+using KeyStats.App.Input;
+using KeyStats.App.Theme;
 using KeyStats.Core;
 using KeyStats.Storage;
 using Microsoft.Win32;
@@ -31,30 +31,40 @@ public partial class MainWindow : Window
     private StatisticsRecorder? _recorder;
     private DateTimeOffset _lastStorageUiRefresh = DateTimeOffset.MinValue;
     private DateTimeOffset _lastHeatmapUiRefresh = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastAnalysisUiRefresh = DateTimeOffset.MinValue;
     private bool _storageRefreshRunning;
     private bool _heatmapRefreshRunning;
+    private bool _analysisRefreshRunning;
     private bool _isClosing;
     private bool _closeCompleted;
-    private bool _rangeControlsReady;
+    private bool _uiReady;
     private bool _startupSettingChanging;
+    private bool _paletteReady;
+    private bool _settingsUiUpdating;
+    private StatusMode _statusMode = StatusMode.Collecting;
     private SettingsStore? _settingsStore;
     private AppSettings? _settings;
     private TimeRangePreset _activeRangePreset = TimeRangePreset.Today;
     private (long StartUtc, long EndUtc)? _selectedRange;
+    private (long StartUtc, long EndUtc)? _analysisRange;
+    private bool _analysisRangeIsCustom;
     private ulong[] _selectedCounts = new ulong[KeyCatalog.Count];
     private ulong[] _selectedStoredCounts = new ulong[KeyCatalog.Count];
+    private ulong[] _selectedDisplayTimeCounts = new ulong[TenMinuteTimelineControl.SegmentCount];
     private ulong[] _selectedStoredTimeCounts = new ulong[TenMinuteTimelineControl.SegmentCount];
     private uint[]? _lastLiveCounts;
     private long? _selectedLiveBucketStart;
     private HashSet<KeyId> _lastVisualPressed = [];
     private HeatPalette _currentPalette = HeatPalette.BlueMagenta;
-    private bool _paletteReady;
+    private HeatScaleMode _currentScaleMode = HeatScaleMode.SquareRoot;
 
     public MainWindow()
     {
         InitializeComponent();
 
         Title = $"KeyStats v{AppInfo.Version} · 键盘与鼠标使用统计";
+        VersionText.Text = $"v{AppInfo.Version}";
+        AboutVersionText.Text = $"KeyStats v{AppInfo.Version} · MIT License";
 
         _startupRegistration = new StartupRegistrationService(
             Environment.ProcessPath ?? throw new InvalidOperationException("无法确定 KeyStats 可执行文件路径。"));
@@ -70,13 +80,15 @@ public partial class MainWindow : Window
         _rowsView = CollectionViewSource.GetDefaultView(_rows);
         _rowsView.SortDescriptions.Add(new SortDescription(nameof(KeyCountRow.DisplayOrder), ListSortDirection.Ascending));
         _rowsView.Filter = FilterRow;
-        KeyGrid.ItemsSource = _rowsView;
+        KeyChipList.ItemsSource = _rowsView;
 
-        PopulateTimeChoices();
-        _rangeControlsReady = true;
-        SetRangeEditorsEnabled(isCustom: false);
-        HeatmapKeyboard.SetData(_selectedCounts, new HashSet<KeyId>(), HeatScaleMode.SquareRoot, _currentPalette);
-        DailyTimeline.SetData(_selectedStoredTimeCounts, _currentPalette);
+        PopulateFontFamilyChoices();
+        InitializeAnalysisDefaults();
+        HeatmapKeyboard.SetData(_selectedCounts, new HashSet<KeyId>(), _currentScaleMode, _currentPalette);
+        DailyTimeline.SetData(_selectedDisplayTimeCounts, _currentPalette);
+        UpdateGradientBar();
+
+        _uiReady = true;
 
         _refreshTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
@@ -84,13 +96,23 @@ public partial class MainWindow : Window
         };
         _refreshTimer.Tick += RefreshTimer_Tick;
 
+        ThemeManager.ThemeChanged += OnThemeChanged;
         SourceInitialized += MainWindow_SourceInitialized;
         Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;
     }
 
+    private enum StatusMode
+    {
+        Collecting,
+        Paused,
+        Error,
+    }
+
     private async void MainWindow_SourceInitialized(object? sender, EventArgs eventArgs)
     {
+        ThemeManager.ApplyWindowChrome(this);
+
         try
         {
             var windowHandle = new WindowInteropHelper(this).Handle;
@@ -133,7 +155,7 @@ public partial class MainWindow : Window
     {
         _rawInput?.ReconcileSystemShortcutState();
         var snapshot = _counter.GetSnapshot();
-        TotalCountText.Text = snapshot.TotalCount.ToString("N0");
+        RunTotalText.Text = snapshot.TotalCount.ToString("N0");
 
         foreach (var row in _rows)
         {
@@ -157,8 +179,8 @@ public partial class MainWindow : Window
         {
             LastInputText.Text = _rawInput.LastInputDescription;
             UnknownInputText.Text = _rawInput.LastUnrecognizedDescription is { } unknown
-                ? $"未识别输入：{_rawInput.UnrecognizedMakeCount:N0} · 最近 {unknown}"
-                : $"未识别输入：{_rawInput.UnrecognizedMakeCount:N0}";
+                ? $"未识别：{_rawInput.UnrecognizedMakeCount:N0} · 最近 {unknown}"
+                : $"未识别：{_rawInput.UnrecognizedMakeCount:N0}";
         }
 
         if (ActiveOnlyCheckBox.IsChecked == true)
@@ -172,217 +194,15 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void RangePresetComboBox_SelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
-    {
-        if (!_rangeControlsReady || RangePresetComboBox.SelectedItem is not ComboBoxItem item)
-        {
-            return;
-        }
-
-        _activeRangePreset = item.Tag is string tag && Enum.TryParse<TimeRangePreset>(tag, out var preset)
-            ? preset
-            : TimeRangePreset.Today;
-        var isCustom = _activeRangePreset == TimeRangePreset.Custom;
-        SetRangeEditorsEnabled(isCustom);
-        RangeValidationText.Text = string.Empty;
-        if (!isCustom)
-        {
-            await ApplyActivePresetAsync();
-        }
-    }
-
-    private async void ApplyRangeButton_Click(object sender, RoutedEventArgs eventArgs)
-    {
-        try
-        {
-            if (StartDatePicker.SelectedDate is not { } startDate || EndDatePicker.SelectedDate is not { } endDate)
-            {
-                throw new InvalidOperationException("请选择开始和结束日期。");
-            }
-
-            if (!TimeSpan.TryParseExact(StartTimeComboBox.Text, @"hh\:mm", CultureInfo.InvariantCulture, out var startTime) ||
-                !TimeSpan.TryParseExact(EndTimeComboBox.Text, @"hh\:mm", CultureInfo.InvariantCulture, out var endTime))
-            {
-                throw new InvalidOperationException("时间格式应为 HH:mm，例如 09:30。");
-            }
-
-            var startLocal = DateTime.SpecifyKind(startDate.Date + startTime, DateTimeKind.Unspecified);
-            var endLocal = DateTime.SpecifyKind(endDate.Date + endTime, DateTimeKind.Unspecified);
-            var range = TimeRangeCalculator.ForCustom(startLocal, endLocal, TenMinuteSnapCheckBox.IsChecked == true);
-            if (range.EndUtc <= range.StartUtc)
-            {
-                throw new InvalidOperationException("结束时间必须晚于开始时间。");
-            }
-
-            _activeRangePreset = TimeRangePreset.Custom;
-            _selectedRange = range;
-            RangeValidationText.Text = string.Empty;
-            await RefreshSelectedRangeAsync(force: true);
-        }
-        catch (Exception exception) when (!_isClosing)
-        {
-            RangeValidationText.Text = exception.Message;
-        }
-    }
-
-    private void ScaleModeComboBox_SelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
-    {
-        if (_rangeControlsReady)
-        {
-            RenderHeatmap(_counter.GetSnapshot().PressedKeys);
-        }
-    }
-
-    private void PopulateTimeChoices()
-    {
-        for (var minute = 0; minute < 24 * 60; minute += 10)
-        {
-            var text = $"{minute / 60:00}:{minute % 60:00}";
-            StartTimeComboBox.Items.Add(text);
-            EndTimeComboBox.Items.Add(text);
-        }
-
-        StartTimeComboBox.Text = "00:00";
-        EndTimeComboBox.Text = DateTime.Now.ToString("HH:mm", CultureInfo.InvariantCulture);
-    }
-
-    private void SetRangeEditorsEnabled(bool isCustom)
-    {
-        StartDatePicker.IsEnabled = isCustom;
-        StartTimeComboBox.IsEnabled = isCustom;
-        EndDatePicker.IsEnabled = isCustom;
-        EndTimeComboBox.IsEnabled = isCustom;
-        TenMinuteSnapCheckBox.IsEnabled = isCustom;
-        ApplyRangeButton.IsEnabled = isCustom;
-    }
-
-    private async Task ApplyActivePresetAsync()
-    {
-        var range = await ResolvePresetRangeAsync(_activeRangePreset);
-        _selectedRange = range;
-        SetRangeEditorValues(range);
-        await RefreshSelectedRangeAsync(force: true);
-    }
-
-    private async Task<(long StartUtc, long EndUtc)> ResolvePresetRangeAsync(TimeRangePreset preset)
-    {
-        // 只有「全部」需要读库拿历史边界，其余预设是纯计算，交给 TimeRangeCalculator。
-        StoredDataRange? storedRange = null;
-        if (preset == TimeRangePreset.All && _repository is not null)
-        {
-            storedRange = await _repository.GetDataRangeAsync(_lifetimeCancellation.Token);
-        }
-
-        return TimeRangeCalculator.ForPreset(preset, DateTimeOffset.Now, storedRange);
-    }
-
-    private void SetRangeEditorValues((long StartUtc, long EndUtc) range)
-    {
-        var startLocal = DateTimeOffset.FromUnixTimeSeconds(range.StartUtc).ToLocalTime();
-        var endLocal = DateTimeOffset.FromUnixTimeSeconds(range.EndUtc).ToLocalTime();
-        StartDatePicker.SelectedDate = startLocal.Date;
-        StartTimeComboBox.Text = startLocal.ToString("HH:mm", CultureInfo.InvariantCulture);
-        EndDatePicker.SelectedDate = endLocal.Date;
-        EndTimeComboBox.Text = endLocal.ToString("HH:mm", CultureInfo.InvariantCulture);
-    }
-
-    private HeatScaleMode GetScaleMode() =>
-        ScaleModeComboBox.SelectedItem is ComboBoxItem { Tag: "Linear" }
-            ? HeatScaleMode.Linear
-            : HeatScaleMode.SquareRoot;
-
-    private void RenderHeatmap(IReadOnlySet<KeyId> pressedKeys) =>
-        HeatmapKeyboard.SetData(_selectedCounts, pressedKeys, GetScaleMode(), _currentPalette);
-
-    private HeatPalette GetPalette() =>
-        PaletteComboBox.SelectedItem is ComboBoxItem { Tag: "GreenAmber" }
-            ? HeatPalette.GreenAmber
-            : HeatPalette.BlueMagenta;
-
-    private void PaletteComboBox_SelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
-    {
-        if (!_paletteReady)
-        {
-            return;
-        }
-
-        _currentPalette = GetPalette();
-        UpdateGradientBar();
-        RenderHeatmap(_counter.GetSnapshot().PressedKeys);
-        // 配色同时作用于时段热力图：按当前范围重算并重绘，使其与键盘热力图同步切换。
-        _ = RefreshSelectedRangeAsync(force: true);
-        _ = SavePaletteAsync();
-    }
-
-    private void UpdateGradientBar()
-    {
-        var brush = new LinearGradientBrush
-        {
-            StartPoint = new System.Windows.Point(0, 0.5),
-            EndPoint = new System.Windows.Point(1, 0.5),
-        };
-        var stops = _currentPalette == HeatPalette.GreenAmber
-            ? new[]
-            {
-                (0.00, Color.FromRgb(247, 248, 250)),
-                (0.30, Color.FromRgb(140, 210, 150)),
-                (0.60, Color.FromRgb(110, 183, 80)),
-                (1.00, Color.FromRgb(225, 130, 50)),
-            }
-            : new[]
-            {
-                (0.00, Color.FromRgb(247, 248, 250)),
-                (0.30, Color.FromRgb(140, 185, 235)),
-                (0.60, Color.FromRgb(108, 120, 208)),
-                (1.00, Color.FromRgb(215, 75, 140)),
-            };
-        foreach (var (offset, color) in stops)
-        {
-            brush.GradientStops.Add(new GradientStop(color, offset));
-        }
-        GradientBar.Background = brush;
-    }
-
-    private async Task SavePaletteAsync()
-    {
-        if (_settingsStore is null || _settings is null)
-        {
-            return;
-        }
-
-        try
-        {
-            _settings.HeatPalette = _currentPalette.ToString();
-            await _settingsStore.SaveAsync(_settings, _lifetimeCancellation.Token);
-        }
-        catch (Exception) when (!_isClosing)
-        {
-        }
-    }
-
-    private void PauseButton_Click(object sender, RoutedEventArgs eventArgs)
-    {
-        SetPaused(!_counter.IsPaused);
-    }
+    private void PauseButton_Click(object sender, RoutedEventArgs eventArgs) => SetPaused(!_counter.IsPaused);
 
     private void SetPaused(bool shouldPause)
     {
         _counter.SetPaused(shouldPause);
         _trayIcon?.SetPaused(shouldPause);
-
-        if (shouldPause)
-        {
-            PauseButton.Content = "恢复采集";
-            StatusText.Text = "已暂停";
-            StatusText.Foreground = new SolidColorBrush(Color.FromRgb(145, 92, 22));
-            StatusDot.Fill = new SolidColorBrush(Color.FromRgb(224, 153, 53));
-            StatusBadge.Background = new SolidColorBrush(Color.FromRgb(255, 246, 225));
-        }
-        else
-        {
-            PauseButton.Content = "暂停采集";
-            SetCollectingStatus();
-        }
+        PauseButton.Content = shouldPause ? "恢复采集" : "暂停采集";
+        _statusMode = shouldPause ? StatusMode.Paused : StatusMode.Collecting;
+        RefreshStatusVisual();
     }
 
     private void ClearButton_Click(object sender, RoutedEventArgs eventArgs)
@@ -406,10 +226,7 @@ public partial class MainWindow : Window
         RefreshTimer_Tick(sender, EventArgs.Empty);
     }
 
-    private async void SaveNowButton_Click(object sender, RoutedEventArgs eventArgs)
-    {
-        await SaveNowAsync();
-    }
+    private async void SaveNowButton_Click(object sender, RoutedEventArgs eventArgs) => await SaveNowAsync();
 
     private async Task SaveNowAsync()
     {
@@ -434,53 +251,6 @@ public partial class MainWindow : Window
             {
                 SaveNowButton.IsEnabled = _recorder is not null;
             }
-        }
-    }
-
-    private void InitializeStartupSetting()
-    {
-        _startupSettingChanging = true;
-        try
-        {
-            StartupCheckBox.IsChecked = _startupRegistration.IsEnabledForCurrentExecutable();
-        }
-        catch (Exception exception)
-        {
-            StartupCheckBox.IsChecked = false;
-            StartupCheckBox.ToolTip = $"读取启动项失败：{exception.Message}";
-        }
-        finally
-        {
-            _startupSettingChanging = false;
-        }
-    }
-
-    private void StartupCheckBox_Changed(object sender, RoutedEventArgs eventArgs)
-    {
-        if (_startupSettingChanging)
-        {
-            return;
-        }
-
-        var requestedState = StartupCheckBox.IsChecked == true;
-        try
-        {
-            _startupRegistration.SetEnabled(requestedState);
-            StartupCheckBox.ToolTip = requestedState
-                ? "已为当前 Windows 用户启用；程序将从当前绿色版路径静默启动。"
-                : "未启用开机自启动。";
-        }
-        catch (Exception exception)
-        {
-            _startupSettingChanging = true;
-            StartupCheckBox.IsChecked = !requestedState;
-            _startupSettingChanging = false;
-            MessageBox.Show(
-                this,
-                $"无法修改 Windows 启动项。\n\n{exception.Message}",
-                "KeyStats",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
         }
     }
 
@@ -538,21 +308,7 @@ public partial class MainWindow : Window
         var settings = await settingsStore.LoadOrCreateAsync(cancellationToken);
         _settingsStore = settingsStore;
         _settings = settings;
-
-        if (Enum.TryParse<HeatPalette>(settings.HeatPalette, out var savedPalette))
-        {
-            _currentPalette = savedPalette;
-            for (var i = 0; i < PaletteComboBox.Items.Count; i++)
-            {
-                if (PaletteComboBox.Items[i] is ComboBoxItem { Tag: string tag } && tag == savedPalette.ToString())
-                {
-                    PaletteComboBox.SelectedIndex = i;
-                    break;
-                }
-            }
-        }
-        _paletteReady = true;
-        UpdateGradientBar();
+        ApplySettingsToUi(settings);
 
         var repository = new KeyStatsRepository(Path.Combine(dataDirectory, "key-stats.db"));
         try
@@ -575,6 +331,7 @@ public partial class MainWindow : Window
             SaveNowButton.IsEnabled = true;
             ExportButton.IsEnabled = true;
             await RefreshStorageUiAsync(force: true);
+            await RefreshAnalysisAsync(force: true);
         }
         catch
         {
@@ -612,15 +369,27 @@ public partial class MainWindow : Window
             var errorText = _recorder?.LastError is { Length: > 0 } error
                 ? $" · 最近错误：{error}"
                 : string.Empty;
-            StorageStatusText.Text = $"本地数据：Data\\key-stats.db · 上次保存 {savedText} · {sizeMegabytes:F2} MB{errorText}";
+
+            DataPathText.Text = _repository.DatabasePath;
+            DataSizeText.Text = $"数据库大小：{sizeMegabytes:F2} MB";
+            StorageStatusText.Text = $"上次保存 {savedText}{errorText}";
             _lastStorageUiRefresh = DateTimeOffset.UtcNow;
+
             if (_activeRangePreset != TimeRangePreset.Custom)
             {
                 _selectedRange = await ResolvePresetRangeAsync(_activeRangePreset);
-                SetRangeEditorValues(_selectedRange.Value);
+                if (_uiReady && !OverviewRangePicker.IsEditorOpen)
+                {
+                    SyncRangePicker(_selectedRange.Value);
+                }
             }
 
             await RefreshSelectedRangeAsync(force);
+
+            if (AnalysisPage.Visibility == Visibility.Visible)
+            {
+                await RefreshAnalysisAsync(force);
+            }
         }
         catch (OperationCanceledException) when (_isClosing)
         {
@@ -638,234 +407,35 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task RefreshSelectedRangeAsync(bool force = false)
-    {
-        if (_heatmapRefreshRunning || _repository is null || _selectedRange is not { } range)
-        {
-            return;
-        }
-
-        if (!force && _lastHeatmapUiRefresh != DateTimeOffset.MinValue)
-        {
-            return;
-        }
-
-        _heatmapRefreshRunning = true;
-        try
-        {
-            var storedCounts = new ulong[KeyCatalog.Count];
-            var storedTimeCounts = new ulong[TenMinuteTimelineControl.SegmentCount];
-            var liveSnapshot = _recorder?.GetCurrentSnapshot();
-            if (liveSnapshot is not null &&
-                liveSnapshot.BucketStartUtc >= range.StartUtc &&
-                liveSnapshot.BucketStartUtc < range.EndUtc)
-            {
-                await AccumulateStoredRangeAsync(range.StartUtc, liveSnapshot.BucketStartUtc, storedCounts);
-                await AccumulateStoredTimeRangeAsync(range.StartUtc, liveSnapshot.BucketStartUtc, storedTimeCounts);
-                await AccumulateStoredRangeAsync(
-                    liveSnapshot.BucketStartUtc + TimeBuckets.MinuteSeconds,
-                    range.EndUtc,
-                    storedCounts);
-                await AccumulateStoredTimeRangeAsync(
-                    liveSnapshot.BucketStartUtc + TimeBuckets.MinuteSeconds,
-                    range.EndUtc,
-                    storedTimeCounts);
-                _selectedLiveBucketStart = liveSnapshot.BucketStartUtc;
-                _lastLiveCounts = (uint[])liveSnapshot.Counts.Clone();
-            }
-            else
-            {
-                await AccumulateStoredRangeAsync(range.StartUtc, range.EndUtc, storedCounts);
-                await AccumulateStoredTimeRangeAsync(range.StartUtc, range.EndUtc, storedTimeCounts);
-                _selectedLiveBucketStart = null;
-                _lastLiveCounts = null;
-            }
-
-            _selectedStoredCounts = storedCounts;
-            _selectedStoredTimeCounts = storedTimeCounts;
-            var displayCounts = (ulong[])storedCounts.Clone();
-            var displayTimeCounts = (ulong[])storedTimeCounts.Clone();
-            if (liveSnapshot is not null && _selectedLiveBucketStart == liveSnapshot.BucketStartUtc)
-            {
-                AddCounts(displayCounts, liveSnapshot.Counts);
-                AddLiveTimeCount(displayTimeCounts, liveSnapshot);
-            }
-
-            ApplySelectedCounts(displayCounts, displayTimeCounts);
-            var pressedKeys = _counter.GetSnapshot().PressedKeys;
-            RenderHeatmap(pressedKeys);
-            HeatmapRangeText.Text = FormatRange(range);
-            HeatmapUpdatedText.Text = $"更新于 {DateTime.Now:HH:mm:ss}";
-            _lastHeatmapUiRefresh = DateTimeOffset.UtcNow;
-        }
-        catch (OperationCanceledException) when (_isClosing)
-        {
-        }
-        catch (Exception exception)
-        {
-            if (!_isClosing)
-            {
-                RangeValidationText.Text = $"查询失败：{exception.Message}";
-            }
-        }
-        finally
-        {
-            _heatmapRefreshRunning = false;
-        }
-    }
-
-    private bool RefreshLiveSelectedCounts()
-    {
-        if (_recorder is null || _selectedRange is not { } range || _selectedLiveBucketStart is null)
-        {
-            return false;
-        }
-
-        var liveSnapshot = _recorder.GetCurrentSnapshot();
-        if (liveSnapshot.BucketStartUtc != _selectedLiveBucketStart)
-        {
-            _ = RefreshStorageUiAsync(force: true);
-            return false;
-        }
-
-        if (liveSnapshot.BucketStartUtc < range.StartUtc || liveSnapshot.BucketStartUtc >= range.EndUtc ||
-            (_lastLiveCounts is not null && _lastLiveCounts.AsSpan().SequenceEqual(liveSnapshot.Counts)))
-        {
-            return false;
-        }
-
-        _lastLiveCounts = (uint[])liveSnapshot.Counts.Clone();
-        var displayCounts = (ulong[])_selectedStoredCounts.Clone();
-        var displayTimeCounts = (ulong[])_selectedStoredTimeCounts.Clone();
-        AddCounts(displayCounts, liveSnapshot.Counts);
-        AddLiveTimeCount(displayTimeCounts, liveSnapshot);
-        ApplySelectedCounts(displayCounts, displayTimeCounts);
-        return true;
-    }
-
-    private void ApplySelectedCounts(ulong[] counts, ulong[] timeCounts)
-    {
-        _selectedCounts = counts;
-        var totalCount = counts.Aggregate(0UL, (sum, count) => checked(sum + count));
-        HeatmapTotalText.Text = $"所选范围总计：{totalCount:N0}";
-        foreach (var row in _rows)
-        {
-            row.Count = counts[(int)row.Id];
-        }
-
-        if (ActiveOnlyCheckBox.IsChecked == true)
-        {
-            _rowsView.Refresh();
-        }
-
-        DailyTimeline.SetData(timeCounts, _currentPalette);
-        var peakCount = timeCounts.Max();
-        if (peakCount == 0)
-        {
-            DailyTimelineSummaryText.Text = "暂无输入";
-        }
-        else
-        {
-            var peakIndex = Array.IndexOf(timeCounts, peakCount);
-            var startMinutes = peakIndex * 10;
-            var endMinutes = startMinutes + 10;
-            DailyTimelineSummaryText.Text =
-                $"峰值 {FormatTimelineTime(startMinutes)}—{FormatTimelineTime(endMinutes)} · {peakCount:N0} 次";
-        }
-    }
-
-    private static void AddLiveTimeCount(ulong[] destination, MinuteBucketSnapshot snapshot)
-    {
-        var localTime = DateTimeOffset.FromUnixTimeSeconds(snapshot.BucketStartUtc).ToLocalTime();
-        var index = (localTime.Hour * 6) + (localTime.Minute / 10);
-        destination[index] = checked(destination[index] + (ulong)snapshot.TotalCount);
-    }
-
-    private static string FormatTimelineTime(int totalMinutes) =>
-        totalMinutes == 24 * 60
-            ? "24:00"
-            : $"{totalMinutes / 60:00}:{totalMinutes % 60:00}";
-
-    private async Task AccumulateStoredRangeAsync(long startUtc, long endUtc, ulong[] destination)
-    {
-        if (_repository is null || startUtc >= endUtc)
-        {
-            return;
-        }
-
-        var aggregate = await _repository.QueryAggregateAsync(startUtc, endUtc, _lifetimeCancellation.Token);
-        AddCounts(destination, aggregate.Counts);
-    }
-
-    private async Task AccumulateStoredTimeRangeAsync(long startUtc, long endUtc, ulong[] destination)
-    {
-        if (_repository is null || startUtc >= endUtc)
-        {
-            return;
-        }
-
-        var series = await _repository.QueryTenMinuteTotalsAsync(
-            startUtc,
-            endUtc,
-            _lifetimeCancellation.Token);
-        foreach (var bucket in series)
-        {
-            var localTime = DateTimeOffset.FromUnixTimeSeconds(bucket.BucketStartUtc).ToLocalTime();
-            var index = (localTime.Hour * 6) + (localTime.Minute / 10);
-            destination[index] = checked(destination[index] + bucket.TotalCount);
-        }
-    }
-
-    private static void AddCounts(ulong[] destination, IReadOnlyList<ulong> source)
-    {
-        for (var index = 0; index < destination.Length; index++)
-        {
-            destination[index] = checked(destination[index] + source[index]);
-        }
-    }
-
-    private static void AddCounts(ulong[] destination, IReadOnlyList<uint> source)
-    {
-        for (var index = 0; index < destination.Length; index++)
-        {
-            destination[index] = checked(destination[index] + source[index]);
-        }
-    }
-
-    private static string FormatRange((long StartUtc, long EndUtc) range)
-    {
-        var start = DateTimeOffset.FromUnixTimeSeconds(range.StartUtc).ToLocalTime();
-        var end = DateTimeOffset.FromUnixTimeSeconds(range.EndUtc).ToLocalTime();
-        return $"{start:yyyy-MM-dd HH:mm} — {end:yyyy-MM-dd HH:mm}（结束不含）";
-    }
-
-    private void FilterChanged(object sender, RoutedEventArgs eventArgs) => _rowsView.Refresh();
-
-    private bool FilterRow(object item)
-    {
-        if (ActiveOnlyCheckBox?.IsChecked != true)
-        {
-            return true;
-        }
-
-        return item is KeyCountRow row && (row.Count > 0 || row.IsPressed);
-    }
-
     private void SetCollectingStatus()
     {
-        StatusText.Text = "正在采集";
-        StatusText.Foreground = new SolidColorBrush(Color.FromRgb(38, 124, 66));
-        StatusDot.Fill = new SolidColorBrush(Color.FromRgb(56, 168, 90));
-        StatusBadge.Background = new SolidColorBrush(Color.FromRgb(233, 247, 239));
+        _statusMode = StatusMode.Collecting;
+        RefreshStatusVisual();
     }
 
     private void SetErrorStatus()
     {
-        StatusText.Text = "启动失败";
-        StatusText.Foreground = new SolidColorBrush(Color.FromRgb(165, 49, 49));
-        StatusDot.Fill = new SolidColorBrush(Color.FromRgb(205, 74, 74));
-        StatusBadge.Background = new SolidColorBrush(Color.FromRgb(255, 235, 235));
+        _statusMode = StatusMode.Error;
+        RefreshStatusVisual();
     }
+
+    private void RefreshStatusVisual()
+    {
+        var (text, foreground, softBackground, dot) = _statusMode switch
+        {
+            StatusMode.Paused => ("已暂停", "WarningBrush", "WarningSoftBrush", "WarningBrush"),
+            StatusMode.Error => ("启动失败", "DangerBrush", "DangerSoftBrush", "DangerBrush"),
+            _ => ("正在采集", "SuccessBrush", "SuccessSoftBrush", "SuccessBrush"),
+        };
+
+        StatusText.Text = text;
+        StatusText.Foreground = FindBrush(foreground);
+        StatusBadge.Background = FindBrush(softBackground);
+        StatusDot.Fill = FindBrush(dot);
+    }
+
+    private Brush FindBrush(string key) =>
+        Application.Current.TryFindResource(key) as Brush ?? Brushes.Gray;
 
     private void SetStorageError(string message)
     {
@@ -900,20 +470,11 @@ public partial class MainWindow : Window
 
     private void TogglePauseFromTray() => SetPaused(!_counter.IsPaused);
 
-    private async void SaveFromTray()
-    {
-        await SaveNowAsync();
-    }
+    private async void SaveFromTray() => await SaveNowAsync();
 
-    private async void ExitFromTray()
-    {
-        await ExitApplicationAsync(confirm: true);
-    }
+    private async void ExitFromTray() => await ExitApplicationAsync(confirm: true);
 
-    public async void ExitFromExternalRequest()
-    {
-        await ExitApplicationAsync(confirm: false);
-    }
+    public async void ExitFromExternalRequest() => await ExitApplicationAsync(confirm: false);
 
     private async Task ExitApplicationAsync(bool confirm)
     {
@@ -976,8 +537,28 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closed(object? sender, EventArgs eventArgs)
     {
+        ThemeManager.ThemeChanged -= OnThemeChanged;
         _trayIcon?.Dispose();
         _trayIcon = null;
         _lifetimeCancellation.Dispose();
+    }
+
+    private void OnThemeChanged()
+    {
+        ThemeManager.ApplyWindowChrome(this);
+        UpdateGradientBar();
+        RefreshStatusVisual();
+    }
+
+    private void FilterChanged(object sender, RoutedEventArgs eventArgs) => _rowsView.Refresh();
+
+    private bool FilterRow(object item)
+    {
+        if (ActiveOnlyCheckBox?.IsChecked != true)
+        {
+            return true;
+        }
+
+        return item is KeyCountRow row && (row.Count > 0 || row.IsPressed);
     }
 }

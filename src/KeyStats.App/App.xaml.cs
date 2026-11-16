@@ -29,6 +29,8 @@ public partial class App : System.Windows.Application
         base.OnStartup(eventArgs);
 
         RegisterGlobalExceptionHandling();
+        // 必须在创建窗口前装好主题，否则第一帧会按浅色画完再跳成深色。
+        Theme.ThemeManager.Initialize();
 
         var startInBackground = eventArgs.Args.Any(
             argument => string.Equals(argument, "--background", StringComparison.OrdinalIgnoreCase));

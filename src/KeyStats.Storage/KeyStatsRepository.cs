@@ -275,6 +275,63 @@ public sealed class KeyStatsRepository : IDisposable
             .ToArray();
     }
 
+    /// <summary>
+    /// 按本地自然日汇总输入量与使用时长。
+    ///
+    /// 必须在分钟粒度上分组：使用时长定义为「有输入的分钟数」，十分钟汇总表会把它抹掉。
+    /// 逐行读取而不是在 SQL 里按日期分组，是为了让跨夏令时的日期边界仍然按真实本地零点计算。
+    /// </summary>
+    public async Task<DailyUsageSummary> QueryDailyUsageAsync(
+        long startUtc,
+        long endUtc,
+        TimeZoneInfo? timeZone = null,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRange(startUtc, endUtc);
+        var zone = timeZone ?? TimeZoneInfo.Local;
+        var perDay = new Dictionary<DateOnly, (ulong Total, int Minutes)>();
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT bucket_start_utc, total_count
+            FROM minute_buckets
+            WHERE bucket_start_utc >= $start AND bucket_start_utc < $end;
+            """;
+        command.Parameters.AddWithValue("$start", startUtc);
+        command.Parameters.AddWithValue("$end", endUtc);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var total = checked((ulong)reader.GetInt64(1));
+            var localTime = TimeZoneInfo.ConvertTime(
+                DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(0)),
+                zone);
+            var date = DateOnly.FromDateTime(localTime.DateTime);
+
+            perDay.TryGetValue(date, out var existing);
+            perDay[date] = (checked(existing.Total + total), existing.Minutes + (total > 0 ? 1 : 0));
+        }
+
+        // 没有任何输入的日子不会产生分钟行，但日均和使用时长要按自然日跨度算，
+        // 否则「10 天里有 1 天在用」会被算成日均 = 当天输入 / 1。这里把区间内的空日补齐。
+        var firstDate = LocalDate(startUtc, zone);
+        var lastDate = LocalDate(endUtc - 1, zone);
+        for (var date = firstDate; date <= lastDate; date = date.AddDays(1))
+        {
+            perDay.TryAdd(date, (0, 0));
+        }
+
+        return DailyUsageSummary.From(perDay
+            .OrderBy(pair => pair.Key)
+            .Select(pair => new DailyUsage(pair.Key, pair.Value.Total, pair.Value.Minutes)));
+    }
+
+    private static DateOnly LocalDate(long utcSeconds, TimeZoneInfo zone) =>
+        DateOnly.FromDateTime(
+            TimeZoneInfo.ConvertTime(DateTimeOffset.FromUnixTimeSeconds(utcSeconds), zone).DateTime);
+
     public async Task ExportCsvAsync(
         long startUtc,
         long endUtc,
