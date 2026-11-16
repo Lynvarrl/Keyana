@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Threading;
 
 namespace KeyStats.App;
 
@@ -21,10 +22,13 @@ public partial class App : System.Windows.Application
     private RegisteredWaitHandle? _showWait;
     private RegisteredWaitHandle? _exitWait;
     private MainWindow? _mainWindow;
+    private bool _unhandledErrorNotified;
 
     protected override void OnStartup(StartupEventArgs eventArgs)
     {
         base.OnStartup(eventArgs);
+
+        RegisterGlobalExceptionHandling();
 
         var startInBackground = eventArgs.Args.Any(
             argument => string.Equals(argument, "--background", StringComparison.OrdinalIgnoreCase));
@@ -81,6 +85,61 @@ public partial class App : System.Windows.Application
         _exitSignal?.Dispose();
         _singleInstanceMutex?.Dispose();
         base.OnExit(eventArgs);
+    }
+
+    /// <summary>
+    /// 注册三层未处理异常兜底。托盘菜单和进程间信号回调里有若干 async void 方法，
+    /// 它们内部抛出的异常不会传到任何调用者；没有兜底时进程会直接消失，而这个程序
+    /// 平时藏在托盘里，用户只会看到统计停止增长。
+    /// </summary>
+    private void RegisterGlobalExceptionHandling()
+    {
+        DispatcherUnhandledException += OnDispatcherUnhandledException;
+        TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+        AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
+    }
+
+    private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs eventArgs)
+    {
+        ErrorLog.Record("Dispatcher", eventArgs.Exception);
+
+        // 保持运行：统计程序挂在一次瞬时 UI 异常上毫无价值，数据都在 SQLite 里，
+        // 继续采集比直接退出更符合用户预期。重复异常只提示一次，避免弹窗刷屏。
+        eventArgs.Handled = true;
+        if (_unhandledErrorNotified)
+        {
+            return;
+        }
+
+        _unhandledErrorNotified = true;
+        try
+        {
+            MessageBox.Show(
+                $"KeyStats 捕获到一个未处理的错误，已记录到日志，程序会继续运行。\n\n" +
+                $"日志：{ErrorLog.LogPath}\n\n{eventArgs.Exception.Message}",
+                "KeyStats",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        catch
+        {
+            // 连提示框都弹不出来时，日志已经落盘，不再做任何事。
+        }
+    }
+
+    private void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs eventArgs)
+    {
+        ErrorLog.Record("TaskScheduler", eventArgs.Exception);
+        eventArgs.SetObserved();
+    }
+
+    private static void OnAppDomainUnhandledException(object sender, UnhandledExceptionEventArgs eventArgs)
+    {
+        // 走到这里进程已经在终止路径上，只能记录，无法恢复。
+        if (eventArgs.ExceptionObject is Exception exception)
+        {
+            ErrorLog.Record("AppDomain", exception);
+        }
     }
 
     /// <summary>
