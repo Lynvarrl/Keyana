@@ -8,6 +8,16 @@ namespace KeyStats.Storage;
 public sealed class KeyStatsRepository : IDisposable
 {
     public const int CurrentSchemaVersion = 1;
+
+    /// <summary>
+    /// 版本 n-1 → n 的增量 DDL 清单。新增版本时在这里追加一条
+    /// <c>(目标版本, 增量 DDL)</c>，例如 <c>(2, "ALTER TABLE minute_buckets ADD COLUMN ...;")</c>。
+    ///
+    /// 不要修改已有条目：它们的职责是把老库升到当年的版本，改动会让已经升过级的
+    /// 数据库对不上。当前 schema 只到版本 1，因此清单为空。
+    /// </summary>
+    private static readonly (int TargetVersion, string Sql)[] SchemaMigrations = [];
+
     private readonly string _connectionString;
 
     public KeyStatsRepository(string databasePath)
@@ -42,16 +52,73 @@ public sealed class KeyStatsRepository : IDisposable
             throw new InvalidDataException($"SQLite 快速完整性检查失败：{integrity}");
         }
 
-        var schemaVersion = await ExecuteScalarLongAsync(connection, "PRAGMA user_version;", cancellationToken);
+        var schemaVersion = checked((int)await ExecuteScalarLongAsync(
+            connection,
+            "PRAGMA user_version;",
+            cancellationToken));
         if (schemaVersion > CurrentSchemaVersion)
         {
             throw new InvalidDataException(
                 $"数据库版本 {schemaVersion} 高于当前程序支持的 {CurrentSchemaVersion}，已拒绝修改。");
         }
 
-        if (schemaVersion == 0)
+        await ApplySchemaMigrationsAsync(connection, schemaVersion, cancellationToken);
+    }
+
+    /// <summary>
+    /// 把数据库逐版本推进到 <see cref="CurrentSchemaVersion"/>。
+    ///
+    /// 每一步单独开事务，并同时推进 <c>PRAGMA user_version</c> 与
+    /// <c>app_meta.schema_version</c>，两者必须保持一致——前者是程序判断版本的依据，
+    /// 后者是可读的元数据，历史上曾经各写各的。
+    ///
+    /// 迁移结束后校验版本确实到位：如果只把 <see cref="CurrentSchemaVersion"/> 调大
+    /// 却忘了往 <see cref="SchemaMigrations"/> 里加条目，这里会立刻抛异常，
+    /// 而不是让程序对着半新半旧的库继续读写。
+    /// </summary>
+    private static async Task ApplySchemaMigrationsAsync(
+        SqliteConnection connection,
+        int currentVersion,
+        CancellationToken cancellationToken)
+    {
+        if (currentVersion == 0)
         {
             await CreateSchemaAsync(connection, cancellationToken);
+            currentVersion = 1;
+        }
+
+        foreach (var (targetVersion, sql) in SchemaMigrations)
+        {
+            if (currentVersion >= targetVersion)
+            {
+                continue;
+            }
+
+            await using var transaction =
+                (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+            await ExecuteNonQueryAsync(connection, transaction, sql, cancellationToken);
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                $"PRAGMA user_version={targetVersion};",
+                cancellationToken);
+            await ExecuteNonQueryAsync(
+                connection,
+                transaction,
+                $"""
+                INSERT INTO app_meta(name, value) VALUES('schema_version', '{targetVersion}')
+                ON CONFLICT(name) DO UPDATE SET value = excluded.value;
+                """,
+                cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            currentVersion = targetVersion;
+        }
+
+        if (currentVersion != CurrentSchemaVersion)
+        {
+            throw new InvalidDataException(
+                $"数据库迁移不完整：已到版本 {currentVersion}，期望 {CurrentSchemaVersion}。" +
+                "请检查 KeyStatsRepository.SchemaMigrations 是否缺少对应的迁移条目。");
         }
     }
 

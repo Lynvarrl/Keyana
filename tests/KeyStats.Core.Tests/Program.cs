@@ -1,3 +1,4 @@
+using System.Globalization;
 using KeyStats.Core;
 using KeyStats.Storage;
 
@@ -25,6 +26,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("稀疏计数向量往返一致", Sync(CountVectorRoundTrips)),
     ("阶段 2 的 Key Map v1 数据仍可读取", LegacyKeyMapRowsRemainReadableAsync),
     ("数据库一分钟写入与绝对快照更新", RepositoryUpsertIsAbsoluteAsync),
+    ("数据库版本号与元数据保持一致", SchemaVersionMetadataStaysConsistentAsync),
+    ("重复初始化为空库不会丢失已有数据", ReinitializeKeepsExistingDataAsync),
+    ("更高版本的数据库会被拒绝", NewerSchemaVersionIsRejectedAsync),
     ("全部范围边界覆盖首末有效分钟", DataRangeTracksSparseBoundsAsync),
     ("历史总数量可排除当前分钟", TotalCountCanExcludeCurrentMinuteAsync),
     ("十分钟派生汇总正确", TenMinuteRollupIsCorrectAsync),
@@ -467,6 +471,103 @@ static async Task SettingsStoreRoundTripsAsync()
     {
         Directory.Delete(directory, recursive: true);
     }
+}
+
+static async Task SchemaVersionMetadataStaysConsistentAsync()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var databasePath = Path.Combine(directory, "schema.db");
+        using (var repository = new KeyStatsRepository(databasePath))
+        {
+            await repository.InitializeAsync();
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        var expected = KeyStatsRepository.CurrentSchemaVersion.ToString(CultureInfo.InvariantCulture);
+        await using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = databasePath }.ToString());
+        await connection.OpenAsync();
+
+        Equal(expected, await ReadScalarAsync(connection, "PRAGMA user_version;"));
+        Equal(expected, await ReadScalarAsync(connection, "SELECT value FROM app_meta WHERE name = 'schema_version';"));
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task ReinitializeKeepsExistingDataAsync()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var databasePath = Path.Combine(directory, "reopen.db");
+        const long minuteStart = 1_800_000_000;
+        using (var first = new KeyStatsRepository(databasePath))
+        {
+            await first.InitializeAsync();
+            await first.UpsertMinuteBucketAsync(new MinuteBucketSnapshot(minuteStart, NewCounts((KeyId.Z, 4))));
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        using var second = new KeyStatsRepository(databasePath);
+        await second.InitializeAsync();
+
+        var aggregate = await second.QueryAggregateAsync(minuteStart, minuteStart + 60);
+        Equal(4UL, aggregate.Counts[(int)KeyId.Z]);
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task NewerSchemaVersionIsRejectedAsync()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var databasePath = Path.Combine(directory, "future.db");
+        await using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder { DataSource = databasePath }.ToString()))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA user_version={KeyStatsRepository.CurrentSchemaVersion + 1};";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        using var repository = new KeyStatsRepository(databasePath);
+        var rejected = false;
+        try
+        {
+            await repository.InitializeAsync();
+        }
+        catch (InvalidDataException)
+        {
+            rejected = true;
+        }
+
+        Equal(true, rejected);
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task<string> ReadScalarAsync(Microsoft.Data.Sqlite.SqliteConnection connection, string commandText)
+{
+    await using var command = connection.CreateCommand();
+    command.CommandText = commandText;
+    return Convert.ToString(await command.ExecuteScalarAsync(), CultureInfo.InvariantCulture) ?? string.Empty;
 }
 
 static async Task WithRepositoryAsync(Func<string, KeyStatsRepository, Task> test)
