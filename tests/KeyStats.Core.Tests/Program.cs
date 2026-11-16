@@ -36,6 +36,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("同一分钟重启后继续累计", RecorderResumesCurrentMinuteAsync),
     ("CSV 导出包含分钟与键位", CsvExportContainsMinuteRowsAsync),
     ("设置文件可原子创建和读取", SettingsStoreRoundTripsAsync),
+    ("旧设置文件含未知字段仍可读取", LegacySettingsWithUnknownKeysStillLoadsAsync),
     ("预设范围按本地零点与固定长度计算", Sync(PresetRangesUseLocalDayStart)),
     ("全部范围并入历史数据边界", Sync(AllRangeMergesStoredBounds)),
     ("自定义范围按十分钟向外对齐", Sync(CustomRangeSnapsToTenMinutes)),
@@ -469,6 +470,36 @@ static async Task SettingsStoreRoundTripsAsync()
         settings.FlushIntervalSeconds = 45;
         await store.SaveAsync(settings);
         Equal(45, (await store.LoadOrCreateAsync()).FlushIntervalSeconds);
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task LegacySettingsWithUnknownKeysStillLoadsAsync()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        // 旧版 settings.json 里有 countKeyRepeat / retentionDays 两个从未实现过的
+        // 字段，模型里删掉之后必须仍能读进来，否则升级会让用户丢掉全部设置。
+        var settingsPath = Path.Combine(directory, "settings.json");
+        await File.WriteAllTextAsync(
+            settingsPath,
+            """
+            {
+              "version": 1,
+              "flushIntervalSeconds": 60,
+              "countKeyRepeat": false,
+              "retentionDays": null,
+              "heatPalette": "GreenAmber"
+            }
+            """);
+
+        var settings = await new SettingsStore(settingsPath).LoadOrCreateAsync();
+        Equal(60, settings.FlushIntervalSeconds);
+        Equal("GreenAmber", settings.HeatPalette);
     }
     finally
     {

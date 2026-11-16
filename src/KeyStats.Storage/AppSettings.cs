@@ -6,10 +6,6 @@ public sealed class AppSettings
 
     public int FlushIntervalSeconds { get; set; } = 30;
 
-    public bool CountKeyRepeat { get; set; }
-
-    public int? RetentionDays { get; set; }
-
     public string HeatPalette { get; set; } = "BlueMagenta";
 
     public void Validate()
@@ -22,11 +18,6 @@ public sealed class AppSettings
         if (FlushIntervalSeconds is < 5 or > 300)
         {
             throw new InvalidDataException("FlushIntervalSeconds 必须在 5～300 秒之间。");
-        }
-
-        if (RetentionDays is <= 0)
-        {
-            throw new InvalidDataException("RetentionDays 必须为空或大于 0。");
         }
     }
 }
