@@ -17,7 +17,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("组合键中的每个物理键分别计数", Sync(ChordKeysCountSeparately)),
     ("系统切换丢失松开消息后可恢复计数", Sync(SystemSwitchReleaseCanBeReconciled)),
     ("Alt+Tab 补偿与 Raw Input 不会重复计数", Sync(AltTabFallbackAndRawInputAreDeduplicated)),
-    ("鼠标左 / 中 / 右键分别计数且按住不连发", Sync(MouseButtonsCountSeparately)),
+    ("鼠标左 / 中 / 右 / 侧键分别计数且按住不连发", Sync(MouseButtonsCountSeparately)),
+    ("鼠标侧键归入鼠标类别并可读名称", Sync(SideButtonsBelongToMouseCategory)),
     ("暂停期间不计数且恢复不误计长按", Sync(PauseMaintainsPressedState)),
     ("清零不破坏按下状态", Sync(ClearDoesNotBreakPressedState)),
     ("界面清零可重置残留按下状态", Sync(ClearCanResetPressedState)),
@@ -217,18 +218,37 @@ static void MouseButtonsCountSeparately()
     Equal(false, counter.ProcessButton(9, KeyId.MouseLeftButton, isBreak: false).Counted);
     counter.ProcessButton(9, KeyId.MouseRightButton, isBreak: false);
     counter.ProcessButton(9, KeyId.MouseMiddleButton, isBreak: false);
+    counter.ProcessButton(9, KeyId.MouseXButton1, isBreak: false);
+    counter.ProcessButton(9, KeyId.MouseXButton2, isBreak: false);
 
     var heldSnapshot = counter.GetSnapshot();
     Equal(1L, heldSnapshot.Counts[(int)KeyId.MouseLeftButton]);
     Equal(1L, heldSnapshot.Counts[(int)KeyId.MouseRightButton]);
     Equal(1L, heldSnapshot.Counts[(int)KeyId.MouseMiddleButton]);
+    Equal(1L, heldSnapshot.Counts[(int)KeyId.MouseXButton1]);
+    Equal(1L, heldSnapshot.Counts[(int)KeyId.MouseXButton2]);
     Equal(true, heldSnapshot.PressedKeys.Contains(KeyId.MouseLeftButton));
     Equal(true, heldSnapshot.PressedKeys.Contains(KeyId.MouseRightButton));
     Equal(true, heldSnapshot.PressedKeys.Contains(KeyId.MouseMiddleButton));
+    Equal(true, heldSnapshot.PressedKeys.Contains(KeyId.MouseXButton1));
+    Equal(true, heldSnapshot.PressedKeys.Contains(KeyId.MouseXButton2));
 
     counter.ProcessButton(9, KeyId.MouseLeftButton, isBreak: true);
     counter.ProcessButton(9, KeyId.MouseLeftButton, isBreak: false);
+    counter.ProcessButton(9, KeyId.MouseXButton1, isBreak: true);
+    counter.ProcessButton(9, KeyId.MouseXButton1, isBreak: false);
     Equal(2L, counter.GetSnapshot().Counts[(int)KeyId.MouseLeftButton]);
+    Equal(2L, counter.GetSnapshot().Counts[(int)KeyId.MouseXButton1]);
+    Equal(1L, counter.GetSnapshot().Counts[(int)KeyId.MouseXButton2]);
+}
+
+static void SideButtonsBelongToMouseCategory()
+{
+    foreach (var keyId in new[] { KeyId.MouseXButton1, KeyId.MouseXButton2 })
+    {
+        Equal("鼠标", KeyCatalog.Get(keyId).Category);
+        Equal(true, KeyCatalog.Get(keyId).DisplayName.Contains("侧键", StringComparison.Ordinal));
+    }
 }
 
 static void PauseMaintainsPressedState()
@@ -289,6 +309,8 @@ static void CountVectorRoundTrips()
     counts[(int)KeyId.A] = 17;
     counts[(int)KeyId.Space] = 43;
     counts[(int)KeyId.NumpadEnter] = 2;
+    counts[(int)KeyId.MouseXButton1] = 9;
+    counts[(int)KeyId.MouseXButton2] = 11;
     var encoded = CountVectorCodec.Encode(counts);
     var decoded = CountVectorCodec.Decode(encoded);
     Equal(counts.Length, decoded.Length);

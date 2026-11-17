@@ -39,6 +39,7 @@ public static class KeyCatalog
         }
 
         if (id is KeyId.MouseLeftButton or KeyId.MouseRightButton or KeyId.MouseMiddleButton or
+            KeyId.MouseXButton1 or KeyId.MouseXButton2 or
             KeyId.MouseWheelUp or KeyId.MouseWheelDown)
         {
             return "鼠标";
@@ -128,6 +129,8 @@ public static class KeyCatalog
         KeyId.MouseLeftButton => "鼠标左键",
         KeyId.MouseRightButton => "鼠标右键",
         KeyId.MouseMiddleButton => "鼠标中键",
+        KeyId.MouseXButton1 => "鼠标侧键 1",
+        KeyId.MouseXButton2 => "鼠标侧键 2",
         KeyId.MouseWheelUp => "滚轮上",
         KeyId.MouseWheelDown => "滚轮下",
         _ => id.ToString(),

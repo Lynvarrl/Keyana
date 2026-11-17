@@ -424,12 +424,16 @@ public partial class MainWindow
         MouseLeftText.Text = counts[(int)KeyId.MouseLeftButton].ToString("N0");
         MouseRightText.Text = counts[(int)KeyId.MouseRightButton].ToString("N0");
         MouseMiddleText.Text = counts[(int)KeyId.MouseMiddleButton].ToString("N0");
+        MouseXButton1Text.Text = counts[(int)KeyId.MouseXButton1].ToString("N0");
+        MouseXButton2Text.Text = counts[(int)KeyId.MouseXButton2].ToString("N0");
         WheelUpText.Text = counts[(int)KeyId.MouseWheelUp].ToString("N0");
         WheelDownText.Text = counts[(int)KeyId.MouseWheelDown].ToString("N0");
         var mouseTotal = checked(
             counts[(int)KeyId.MouseLeftButton] +
             counts[(int)KeyId.MouseRightButton] +
             counts[(int)KeyId.MouseMiddleButton] +
+            counts[(int)KeyId.MouseXButton1] +
+            counts[(int)KeyId.MouseXButton2] +
             counts[(int)KeyId.MouseWheelUp] +
             counts[(int)KeyId.MouseWheelDown]);
         MouseTotalText.Text = mouseTotal.ToString("N0");

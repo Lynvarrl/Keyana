@@ -33,4 +33,5 @@ public enum KeyId
     MouseLeftButton, MouseRightButton,
     MouseWheelUp, MouseWheelDown,
     MouseMiddleButton,
+    MouseXButton1, MouseXButton2,
 }

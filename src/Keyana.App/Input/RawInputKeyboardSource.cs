@@ -24,6 +24,10 @@ public sealed class RawInputKeyboardSource : IDisposable
     private const ushort RiMouseRightButtonUp = 0x0008;
     private const ushort RiMouseMiddleButtonDown = 0x0010;
     private const ushort RiMouseMiddleButtonUp = 0x0020;
+    private const ushort RiMouseButton4Down = 0x0040;
+    private const ushort RiMouseButton4Up = 0x0080;
+    private const ushort RiMouseButton5Down = 0x0100;
+    private const ushort RiMouseButton5Up = 0x0200;
     private const ushort RiMouseWheel = 0x0400;
 
     private readonly KeyboardCounter _counter;
@@ -254,6 +258,8 @@ public sealed class RawInputKeyboardSource : IDisposable
         ProcessMouseButton(rawInput.Header.Device, buttonFlags, RiMouseLeftButtonDown, RiMouseLeftButtonUp, KeyId.MouseLeftButton);
         ProcessMouseButton(rawInput.Header.Device, buttonFlags, RiMouseRightButtonDown, RiMouseRightButtonUp, KeyId.MouseRightButton);
         ProcessMouseButton(rawInput.Header.Device, buttonFlags, RiMouseMiddleButtonDown, RiMouseMiddleButtonUp, KeyId.MouseMiddleButton);
+        ProcessMouseButton(rawInput.Header.Device, buttonFlags, RiMouseButton4Down, RiMouseButton4Up, KeyId.MouseXButton1);
+        ProcessMouseButton(rawInput.Header.Device, buttonFlags, RiMouseButton5Down, RiMouseButton5Up, KeyId.MouseXButton2);
         ProcessMouseWheel(rawInput.Header.Device, rawInput.Data.Mouse);
     }
 

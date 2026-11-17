@@ -314,7 +314,17 @@
                             <StackPanel>
                                 <TextBlock Text="鼠标与滚轮" Style="{StaticResource CardTitleText}" />
                                 <TextBlock Text="与键盘共用同一套分钟聚合" Style="{StaticResource CaptionText}" Margin="0,3,0,0" />
-                                <UniformGrid Columns="3" Rows="2" Margin="0,14,-7,0">
+                                <Grid Margin="0,14,-7,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
                                     <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
                                         <StackPanel>
                                             <TextBlock Text="左键" Style="{StaticResource CaptionText}" />
@@ -322,42 +332,57 @@
                                                        FontWeight="SemiBold" Margin="0,3,0,0" />
                                         </StackPanel>
                                     </Border>
-                                    <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
+                                    <Border Grid.Column="1" Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
                                         <StackPanel>
                                             <TextBlock Text="中键" Style="{StaticResource CaptionText}" />
                                             <TextBlock x:Name="MouseMiddleText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
                                                        FontWeight="SemiBold" Margin="0,3,0,0" />
                                         </StackPanel>
                                     </Border>
-                                    <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
+                                    <Border Grid.Column="2" Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
                                         <StackPanel>
                                             <TextBlock Text="右键" Style="{StaticResource CaptionText}" />
                                             <TextBlock x:Name="MouseRightText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
                                                        FontWeight="SemiBold" Margin="0,3,0,0" />
                                         </StackPanel>
                                     </Border>
-                                    <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,7,0">
+                                    <Border Grid.Row="1" Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
+                                        <StackPanel>
+                                            <TextBlock Text="侧键 1" Style="{StaticResource CaptionText}" />
+                                            <TextBlock x:Name="MouseXButton1Text" Text="0" FontSize="{DynamicResource FontSizeTitle}"
+                                                       FontWeight="SemiBold" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
+                                        <StackPanel>
+                                            <TextBlock Text="侧键 2" Style="{StaticResource CaptionText}" />
+                                            <TextBlock x:Name="MouseXButton2Text" Text="0" FontSize="{DynamicResource FontSizeTitle}"
+                                                       FontWeight="SemiBold" Margin="0,3,0,0" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
                                         <StackPanel>
                                             <TextBlock Text="滚轮上" Style="{StaticResource CaptionText}" />
                                             <TextBlock x:Name="WheelUpText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
                                                        FontWeight="SemiBold" Margin="0,3,0,0" />
                                         </StackPanel>
                                     </Border>
-                                    <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,7,0">
+                                    <Border Grid.Row="2" Style="{StaticResource InnerTileStyle}" Margin="0,0,7,0">
                                         <StackPanel>
                                             <TextBlock Text="滚轮下" Style="{StaticResource CaptionText}" />
                                             <TextBlock x:Name="WheelDownText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
                                                        FontWeight="SemiBold" Margin="0,3,0,0" />
                                         </StackPanel>
                                     </Border>
-                                    <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,7,0">
+                                    <Border Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2"
+                                            Style="{StaticResource InnerTileStyle}" Margin="0,0,7,0">
                                         <StackPanel>
                                             <TextBlock Text="合计" Style="{StaticResource CaptionText}" />
                                             <TextBlock x:Name="MouseTotalText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
                                                        FontWeight="SemiBold" Margin="0,3,0,0" />
                                         </StackPanel>
                                     </Border>
-                                </UniformGrid>
+                                </Grid>
                             </StackPanel>
                         </Border>
 

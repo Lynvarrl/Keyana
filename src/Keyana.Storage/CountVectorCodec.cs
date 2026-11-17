@@ -9,10 +9,10 @@ public static class CountVectorCodec
     public const int MinimumSupportedKeyMapVersion = 1;
 
     /// <summary>
-    /// 当前写入的键位表版本。v2 加入鼠标左右键，v3 加入滚轮上下，v4 加入鼠标中键。
-    /// 只追加枚举成员、不重排，旧版本的数据仍按下标正确解码。
+    /// 当前写入的键位表版本。v2 加入鼠标左右键，v3 加入滚轮上下，v4 加入鼠标中键，
+    /// v5 加入鼠标侧键。只追加枚举成员、不重排，旧版本的数据仍按下标正确解码。
     /// </summary>
-    public const int KeyMapVersion = 4;
+    public const int KeyMapVersion = 5;
     private const int HeaderSize = 3;
     private const int EntrySize = 6;
 
