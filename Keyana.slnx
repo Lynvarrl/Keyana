@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="src/Keyana.Core/Keyana.Core.csproj" />
+  <Project Path="src/Keyana.Storage/Keyana.Storage.csproj" />
+  <Project Path="src/Keyana.App/Keyana.App.csproj" />
+  <Project Path="tests/Keyana.Core.Tests/Keyana.Core.Tests.csproj" />
+</Solution>

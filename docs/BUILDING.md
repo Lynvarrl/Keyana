@@ -11,8 +11,8 @@
 ## 构建
 
 ```powershell
-dotnet restore .\KeyStats.slnx
-dotnet build .\KeyStats.slnx -c Release --no-restore
+dotnet restore .\Keyana.slnx
+dotnet build .\Keyana.slnx -c Release --no-restore
 ```
 
 ## 回归测试
@@ -20,7 +20,7 @@ dotnet build .\KeyStats.slnx -c Release --no-restore
 测试项目是一个无第三方测试框架的控制台程序：
 
 ```powershell
-dotnet run --project .\tests\KeyStats.Core.Tests -c Release --no-build
+dotnet run --project .\tests\Keyana.Core.Tests -c Release --no-build
 ```
 
 进程返回码为 0 表示全部通过。
@@ -31,9 +31,9 @@ dotnet run --project .\tests\KeyStats.Core.Tests -c Release --no-build
 .\scripts\publish.ps1
 ```
 
-脚本会生成（版本号取自 `src/KeyStats.App/KeyStats.App.csproj` 的 `<Version>`）：
+脚本会生成（版本号取自 `src/Keyana.App/Keyana.App.csproj` 的 `<Version>`）：
 
-- `KeyStats-V<版本号>-full-win-x64.zip`：包含 .NET 桌面运行时；
-- `KeyStats-V<版本号>-lite-win-x64.zip`：依赖 x64 .NET 10 Desktop Runtime；
+- `Keyana-V<版本号>-full-win-x64.zip`：包含 .NET 桌面运行时；
+- `Keyana-V<版本号>-lite-win-x64.zip`：依赖 x64 .NET 10 Desktop Runtime；
 - `SHA256SUMS.txt`：两个 ZIP 的 SHA-256。
 

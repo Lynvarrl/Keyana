@@ -2,7 +2,7 @@
 
 ## 不采集的内容
 
-KeyStats 不保存：
+Keyana 不保存：
 
 - 用户实际输入的文本；
 - 按键发生的先后顺序；
@@ -18,10 +18,10 @@ KeyStats 不保存：
 
 数据位于程序旁的 `Data` 目录：
 
-- `key-stats.db`：SQLite 聚合数据库；
+- `keyana.db`：SQLite 聚合数据库；
 - `settings.json`：本地设置。
 
-程序使用 SQLite WAL，因此运行期间还可能出现 `key-stats.db-wal` 和 `key-stats.db-shm`。
+程序使用 SQLite WAL，因此运行期间还可能出现 `keyana.db-wal` 和 `keyana.db-shm`。
 
 ## 迁移与删除
 

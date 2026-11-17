@@ -5,7 +5,7 @@
 $ErrorActionPreference = "Stop"
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot ".."))
 $artifactsRoot = [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $OutputDirectory))
-$projectPath = Join-Path $repositoryRoot "src\KeyStats.App\KeyStats.App.csproj"
+$projectPath = Join-Path $repositoryRoot "src\Keyana.App\Keyana.App.csproj"
 $readmePath = Join-Path $repositoryRoot "docs\USER_GUIDE.md"
 
 # 版本号只在 csproj 的 <Version> 里维护，这里读回来给产物命名，
@@ -52,8 +52,8 @@ dotnet publish $projectPath -c Release -r win-x64 --self-contained false `
 New-Item -ItemType Directory -Path (Join-Path $liteOutput "Data") -Force | Out-Null
 Copy-Item -LiteralPath $readmePath -Destination (Join-Path $liteOutput "README.md")
 
-$fullZip = Join-Path $artifactsRoot "KeyStats-V$version-full-win-x64.zip"
-$liteZip = Join-Path $artifactsRoot "KeyStats-V$version-lite-win-x64.zip"
+$fullZip = Join-Path $artifactsRoot "Keyana-V$version-full-win-x64.zip"
+$liteZip = Join-Path $artifactsRoot "Keyana-V$version-lite-win-x64.zip"
 Compress-Archive -Path (Join-Path $fullOutput "*") -DestinationPath $fullZip -CompressionLevel Optimal -Force
 Compress-Archive -Path (Join-Path $liteOutput "*") -DestinationPath $liteZip -CompressionLevel Optimal -Force
 

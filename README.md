@@ -2,7 +2,7 @@
 
 Keyana (Key Analyzer)，一款完全本地化的 Windows 键盘与鼠标使用分析工具，只统计次数，不记录内容。
 
-它按分钟保存聚合计数，并提供时间范围、时段分布和全尺寸键盘热力图。项目内部仍以 KeyStats 作为代号，解决方案、命名空间和输出程序的名称暂时保持不变。
+它按分钟保存聚合计数，并提供时间范围、时段分布和全尺寸键盘热力图。1.3.1 起软件正式更名为 Keyana，解决方案、命名空间、程序集与数据文件名统一随之更新。
 
 ## 隐私原则
 
@@ -44,9 +44,9 @@ Keyana (Key Analyzer)，一款完全本地化的 Windows 键盘与鼠标使用�
 ## 从源码构建
 
 ```powershell
-dotnet restore .\KeyStats.slnx
-dotnet build .\KeyStats.slnx -c Release --no-restore
-dotnet run --project .\tests\KeyStats.Core.Tests -c Release --no-build
+dotnet restore .\Keyana.slnx
+dotnet build .\Keyana.slnx -c Release --no-restore
+dotnet run --project .\tests\Keyana.Core.Tests -c Release --no-build
 ```
 
 生成完整自包含版和轻量版：
@@ -60,10 +60,10 @@ dotnet run --project .\tests\KeyStats.Core.Tests -c Release --no-build
 ## 目录结构
 
 ```text
-src/KeyStats.Core/          键位模型、归一化和计数逻辑
-src/KeyStats.Storage/       SQLite、分钟聚合、设置与导出
-src/KeyStats.App/           WPF 界面、Raw Input 和托盘生命周期
-tests/KeyStats.Core.Tests/  无第三方测试框架的回归测试
+src/Keyana.Core/          键位模型、归一化和计数逻辑
+src/Keyana.Storage/       SQLite、分钟聚合、设置与导出
+src/Keyana.App/           WPF 界面、Raw Input 和托盘生命周期
+tests/Keyana.Core.Tests/  无第三方测试框架的回归测试
 docs/                       使用、构建、隐私和测试说明
 scripts/                    发行包构建脚本
 ```
@@ -76,7 +76,7 @@ scripts/                    发行包构建脚本
 
 ## 游戏兼容性
 
-普通桌面程序和大多数游戏可以使用 Raw Input 计数。如果游戏以管理员权限运行，请尝试以相同权限启动 KeyStats。部分采用独占输入或反作弊隔离的游戏可能不会向普通桌面程序提供输入事件，本项目不会尝试绕过反作弊机制。
+普通桌面程序和大多数游戏可以使用 Raw Input 计数。如果游戏以管理员权限运行，请尝试以相同权限启动 Keyana。部分采用独占输入或反作弊隔离的游戏可能不会向普通桌面程序提供输入事件，本项目不会尝试绕过反作弊机制。
 
 ## 参与贡献
 

@@ -1,6 +1,6 @@
 # 参与贡献
 
-感谢你愿意改进 KeyStats。
+感谢你愿意改进 Keyana。
 
 ## 开发环境
 
@@ -17,9 +17,9 @@
 5. 提交 Pull Request，说明动机、行为变化和验证方式。
 
 ```powershell
-dotnet restore .\KeyStats.slnx
-dotnet build .\KeyStats.slnx -c Release --no-restore
-dotnet run --project .\tests\KeyStats.Core.Tests -c Release --no-build
+dotnet restore .\Keyana.slnx
+dotnet build .\Keyana.slnx -c Release --no-restore
+dotnet run --project .\tests\Keyana.Core.Tests -c Release --no-build
 ```
 
 ## 代码约定
