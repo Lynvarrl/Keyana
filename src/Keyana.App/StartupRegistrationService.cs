@@ -111,8 +111,10 @@ internal sealed class StartupRegistrationService
         // 对该任务的写权限，普通权限会直接被拒。走提权 helper 时由 helper 自己删，
         // 避免连续弹两次 UAC。
         var createElevated = runAsAdministrator && !IsProcessElevated();
-        if (!createElevated && TryQueryTask(out _))
+        if (!createElevated)
         {
+            // 这里不再先 TryQueryTask：查询本身也可能失败，而“清理旧任务”必须尽力做。
+            // 任务不存在时 schtasks 会返回“找不到指定的文件”，按成功处理。
             RemoveStartupTask();
         }
 
@@ -210,9 +212,13 @@ internal sealed class StartupRegistrationService
 
     private void DeleteTaskDirectly()
     {
-        if (TryQueryTask(out _))
+        try
         {
             RunSchtasksCaptured($"/Delete /F /TN \"{TaskName}\"", "删除自启动任务");
+        }
+        catch (InvalidOperationException exception) when (IsTaskNotFound(exception))
+        {
+            // 任务不存在，视为已清理。
         }
 
         RemoveLegacyRunKey();
@@ -314,7 +320,9 @@ internal sealed class StartupRegistrationService
         catch (System.ComponentModel.Win32Exception exception) when (exception.NativeErrorCode == 1223)
         {
             // 1223 == ERROR_CANCELLED：用户在 UAC 对话框点了“否”。
-            throw new InvalidOperationException("已取消管理员授权，因此没有启用管理员自启。");
+            throw new InvalidOperationException(runAsAdministrator
+                ? "已取消管理员授权，因此没有启用管理员自启。"
+                : "已取消管理员授权，因此没有启用开机自启。");
         }
     }
 
@@ -507,26 +515,32 @@ internal sealed class StartupRegistrationService
 
     private void RemoveStartupTask()
     {
-        if (TryQueryTask(out _))
+        // 不先 TryQueryTask：查询本身可能失败（编码/权限），但“关闭自启”必须尽力
+        // 删除旧任务。任务本来不存在时按成功处理；删不掉（旧的高权限任务）时走
+        // 一次 UAC helper，避免留下“界面显示已关、实际还在自启”的残留。
+        try
         {
-            try
-            {
-                RunSchtasksCaptured($"/Delete /F /TN \"{TaskName}\"", "删除自启动任务");
-            }
-            catch (InvalidOperationException) when (!IsProcessElevated())
-            {
-                // 旧任务可能是 1.1.x 以最高权限创建的，普通权限删不掉它。
-                // 用一次 UAC helper 删除，避免把用户卡在“关不掉也换不了”的状态。
-                RunElevatedUnregistrationHelper();
-                if (TryQueryTask(out _))
-                {
-                    throw new InvalidOperationException(
-                        "删除自启动任务失败：任务仍存在，可能需要管理员权限。");
-                }
-            }
+            RunSchtasksCaptured($"/Delete /F /TN \"{TaskName}\"", "删除自启动任务");
+        }
+        catch (InvalidOperationException exception) when (IsTaskNotFound(exception))
+        {
+            // 本来就没有任务。
+        }
+        catch (InvalidOperationException exception) when (!IsProcessElevated() && IsAccessDenied(exception))
+        {
+            RunElevatedUnregistrationHelper();
         }
 
         RemoveLegacyRunKey();
+    }
+
+    private static bool IsTaskNotFound(Exception exception)
+    {
+        var message = exception.Message;
+        return message.Contains("找不到指定的文件", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("cannot find the file", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("does not exist", StringComparison.OrdinalIgnoreCase) ||
+               message.Contains("任务不存在", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>通过 UAC 启动 helper 删除旧的高权限自启任务。</summary>
@@ -613,6 +627,11 @@ internal sealed class StartupRegistrationService
 
             if (!TryParseTaskXml(stdout.ToArray(), out var document, out var xmlText))
             {
+                var bytes = stdout.ToArray();
+                ErrorLog.Record(
+                    "Startup.Query",
+                    new InvalidDataException(
+                        $"无法解析 schtasks /Query /XML 的输出（{bytes.Length} 字节）：{PreviewBytes(bytes)}"));
                 return false;
             }
 
@@ -644,8 +663,9 @@ internal sealed class StartupRegistrationService
                 xmlText);
             return true;
         }
-        catch
+        catch (Exception exception)
         {
+            ErrorLog.Record("Startup.Query", exception);
             return false;
         }
     }
@@ -699,6 +719,26 @@ internal sealed class StartupRegistrationService
         }
 
         return false;
+    }
+
+    /// <summary>解析失败时给日志留一小段可读预览，便于判断实际编码。</summary>
+    private static string PreviewBytes(byte[] bytes)
+    {
+        try
+        {
+            var text = Encoding.Unicode.GetString(bytes);
+            if (!text.Contains('<'))
+            {
+                text = Encoding.UTF8.GetString(bytes);
+            }
+
+            text = text.Replace('\0', ' ').Trim();
+            return text.Length <= 400 ? text : text[..400];
+        }
+        catch
+        {
+            return "(无法预览)";
+        }
     }
 
     private static bool IsElementTrue(XDocument document, XNamespace ns, string localName)

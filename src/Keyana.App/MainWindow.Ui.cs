@@ -355,6 +355,7 @@ public partial class MainWindow
 
         if (failure is not null)
         {
+            ErrorLog.Record("Startup", failure);
             MessageBox.Show(
                 this,
                 $"无法修改 Windows 启动项。\n\n{failure.Message}",
