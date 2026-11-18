@@ -44,10 +44,8 @@ public partial class MainWindow
 
     private async void OverviewRangePicker_RangeApplied(object? sender, EventArgs eventArgs)
     {
-        var range = TimeRangeCalculator.ForCustom(
-            OverviewRangePicker.RangeStart,
-            OverviewRangePicker.RangeEnd,
-            _settings?.SnapToTenMinutes ?? true);
+        _customRangeInput = (OverviewRangePicker.RangeStart, OverviewRangePicker.RangeEnd);
+        var range = ResolveCustomRange(_customRangeInput.Value);
 
         if (range.EndUtc <= range.StartUtc)
         {
@@ -85,6 +83,27 @@ public partial class MainWindow
 
     private async Task ApplyActivePresetAsync()
     {
+        if (_activeRangePreset == TimeRangePreset.Custom)
+        {
+            // 自定义区间必须回到用户原始输入重算；ForPreset(Custom) 现在会直接抛错，
+            // 避免切换吸附时又被悄悄改成「今天」。
+            if (_customRangeInput is not { } input)
+            {
+                return;
+            }
+
+            var custom = ResolveCustomRange(input);
+            if (custom.EndUtc <= custom.StartUtc)
+            {
+                return;
+            }
+
+            _selectedRange = custom;
+            SyncRangePicker(custom);
+            await RefreshSelectedRangeAsync(force: true);
+            return;
+        }
+
         if (_repository is null && _activeRangePreset == TimeRangePreset.All)
         {
             return;
@@ -95,6 +114,9 @@ public partial class MainWindow
         SyncRangePicker(range);
         await RefreshSelectedRangeAsync(force: true);
     }
+
+    private (long StartUtc, long EndUtc) ResolveCustomRange((DateTime Start, DateTime End) input) =>
+        TimeRangeCalculator.ForCustom(input.Start, input.End, _settings?.SnapToTenMinutes ?? true);
 
     private async Task<(long StartUtc, long EndUtc)> ResolvePresetRangeAsync(TimeRangePreset preset)
     {
@@ -236,7 +258,23 @@ public partial class MainWindow
     /// </summary>
     private async Task RefreshActivityMetricsAsync()
     {
-        if (_repository is null || _activityRange is not { } range)
+        if (_repository is null)
+        {
+            return;
+        }
+
+        // 相对预设跟着当前时钟走：页面停留过夜后，「近 30 天」不能还停在昨天的窗口。
+        if (_activityPreset != TimeRangePreset.Custom)
+        {
+            var presetRange = await ResolvePresetRangeAsync(_activityPreset);
+            _activityRange = presetRange;
+            if (!ActivityRangePicker.IsEditorOpen)
+            {
+                ActivityRangePicker.SetRangeUtc(presetRange.StartUtc, presetRange.EndUtc);
+            }
+        }
+
+        if (_activityRange is not { } range)
         {
             return;
         }
@@ -285,6 +323,11 @@ public partial class MainWindow
             return;
         }
 
+        if (preset == TimeRangePreset.Custom)
+        {
+            return;
+        }
+
         if (preset == _activityPreset && _activityRange is not null)
         {
             return;
@@ -307,11 +350,18 @@ public partial class MainWindow
 
     private async void ActivityRangePicker_RangeApplied(object? sender, EventArgs eventArgs)
     {
-        var range = TimeRangeCalculator.ForCustom(
-            ActivityRangePicker.RangeStart,
-            ActivityRangePicker.RangeEnd,
-            _settings?.SnapToTenMinutes ?? true);
+        _customActivityInput = (ActivityRangePicker.RangeStart, ActivityRangePicker.RangeEnd);
+        await ApplyActivityCustomRangeAsync();
+    }
 
+    private async Task ApplyActivityCustomRangeAsync()
+    {
+        if (_customActivityInput is not { } input)
+        {
+            return;
+        }
+
+        var range = ResolveCustomRange(input);
         if (range.EndUtc <= range.StartUtc)
         {
             return;

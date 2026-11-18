@@ -120,6 +120,15 @@ public partial class DateRangePicker : UserControl
 
         start = startDate.ToDateTime(TimeOnly.FromTimeSpan(StartTime.Value));
         end = endDate.ToDateTime(TimeOnly.FromTimeSpan(EndTime.Value));
+
+        // 区间是左闭右开的：单日选到 23:59 的真实含义是「到当天结束」，补成次日
+        // 00:00；否则 23:59 这一分钟会被右开区间漏掉。24:00 无法直接输入，这是
+        // 唯一能表达「完整一天」的写法。
+        if (startDate == endDate && TimeOnly.FromTimeSpan(EndTime.Value) == new TimeOnly(23, 59))
+        {
+            end = endDate.AddDays(1).ToDateTime(TimeOnly.MinValue);
+        }
+
         return end > start;
     }
 

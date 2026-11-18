@@ -35,6 +35,16 @@ var tests = new (string Name, Func<Task> Run)[]
     ("十分钟派生汇总正确", TenMinuteRollupIsCorrectAsync),
     ("十分钟时段序列正确处理范围边缘", TenMinuteSeriesHandlesRangeEdgesAsync),
     ("同一分钟重启后继续累计", RecorderResumesCurrentMinuteAsync),
+    ("保存瞬时失败会退避重试并最终落盘", RecorderRetriesTransientFailureAsync),
+    ("持续保存失败不丢内存数据，恢复后补写", RecorderKeepsDataAfterPersistentFailureAsync),
+    ("退出期间接受的输入全部落盘", RecorderPersistsAcceptedPressesOnDisposeAsync),
+    ("手动保存被取消不影响后续落盘", RecorderFlushCancellationDoesNotLoseDataAsync),
+    ("持续失败时退出仍能完成清理", RecorderDisposeCompletesWhenSaveKeepsFailingAsync),
+    ("慢写下不会用旧快照覆盖新数据", RecorderNeverWritesStaleSnapshotAsync),
+    ("退出后拒绝新的按键", RecorderRejectsPressesAfterDisposeAsync),
+    ("旧数据库迁移先把 WAL 并回主库", LegacyMigrationMergesWalBeforeMoveAsync),
+    ("旧数据库被占用时拒绝迁移", LegacyMigrationRefusesWhileLockedAsync),
+    ("设置文件语法损坏时降级为默认值", CorruptSettingsFallBackToDefaultsAsync),
     ("CSV 导出包含分钟与键位", CsvExportContainsMinuteRowsAsync),
     ("设置文件可原子创建和读取", SettingsStoreRoundTripsAsync),
     ("旧设置文件含未知字段仍可读取", LegacySettingsWithUnknownKeysStillLoadsAsync),
@@ -42,6 +52,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("昨天范围覆盖完整本地自然日", Sync(YesterdayRangeCoversWholeLocalDay)),
     ("全部范围并入历史数据边界", Sync(AllRangeMergesStoredBounds)),
     ("自定义范围按十分钟向外对齐", Sync(CustomRangeSnapsToTenMinutes)),
+    ("自定义区间不能走预设换算", Sync(CustomPresetRequiresExplicitRange)),
+    ("午夜发生夏令时跳变时仍能算出当天起点", Sync(MidnightDstTransitionUsesFirstValidInstant)),
     ("滚轮增量按 120 单位累计成刻度", Sync(WheelAccumulatesToNotches)),
     ("滚轮脉冲可连续计数且不进入按下状态", Sync(WheelImpulseCountsRepeatedly)),
     ("逐日汇总识别活跃日、火热日与逐小时分布", DailyUsageMarksActiveAndFireDaysAsync),
@@ -473,6 +485,337 @@ static async Task RecorderResumesCurrentMinuteAsync()
     });
 }
 
+static async Task RecorderRetriesTransientFailureAsync()
+{
+    var store = new FakeMinuteStore { FailuresRemaining = 2 };
+    var clock = new ManualClock(DateTimeOffset.FromUnixTimeSeconds(1_800_000_030));
+    await using var recorder = await StatisticsRecorder.CreateAsync(
+        store,
+        TimeSpan.FromHours(1),
+        clock);
+
+    recorder.RecordKeyPress(KeyId.A);
+    recorder.RecordKeyPress(KeyId.A);
+    recorder.RecordKeyPress(KeyId.B);
+
+    // 前两次写入抛异常，第三次尝试成功——FlushNow 应该正常返回而不是把错误抛给界面。
+    await recorder.FlushNowAsync();
+
+    var minuteStart = TimeBuckets.ToMinuteStart(clock.UtcNow);
+    Equal(3L, store.TotalFor(minuteStart));
+    Equal(true, recorder.LastError is null);
+    Equal(1, store.WriteCountFor(minuteStart));
+}
+
+static async Task RecorderKeepsDataAfterPersistentFailureAsync()
+{
+    var store = new FakeMinuteStore { AlwaysFail = true };
+    var clock = new ManualClock(DateTimeOffset.FromUnixTimeSeconds(1_800_000_030));
+    await using var recorder = await StatisticsRecorder.CreateAsync(
+        store,
+        TimeSpan.FromHours(1),
+        clock);
+
+    recorder.RecordKeyPress(KeyId.A);
+    recorder.RecordKeyPress(KeyId.A);
+
+    var failure = await CaptureAsync(() => recorder.FlushNowAsync());
+    Equal(true, failure is InvalidOperationException);
+    Equal(true, recorder.LastError is { Length: > 0 });
+
+    // 关键点：失败后计数仍留在待写表里，恢复后能补写，不会被“内存已清空”吞掉。
+    store.AlwaysFail = false;
+    await recorder.FlushNowAsync();
+
+    var minuteStart = TimeBuckets.ToMinuteStart(clock.UtcNow);
+    Equal(2L, store.TotalFor(minuteStart));
+    Equal(true, recorder.LastError is null);
+}
+
+static async Task RecorderPersistsAcceptedPressesOnDisposeAsync()
+{
+    var store = new FakeMinuteStore();
+    var clock = new ManualClock(DateTimeOffset.FromUnixTimeSeconds(1_800_000_030));
+    var recorder = await StatisticsRecorder.CreateAsync(store, TimeSpan.FromHours(1), clock);
+
+    var accepted = 0;
+    var stop = 0;
+    var presser = Task.Run(() =>
+    {
+        while (Volatile.Read(ref stop) == 0)
+        {
+            if (recorder.RecordKeyPress(KeyId.A))
+            {
+                Interlocked.Increment(ref accepted);
+            }
+        }
+    });
+
+    await Task.Delay(30);
+    await recorder.DisposeAsync();
+    Volatile.Write(ref stop, 1);
+    await presser;
+
+    // 退出流程只允许两种结果：接受并保存，或明确拒绝。绝不接受却永不落盘。
+    var minuteStart = TimeBuckets.ToMinuteStart(clock.UtcNow);
+    Equal((long)accepted, store.TotalFor(minuteStart));
+    Equal(false, recorder.RecordKeyPress(KeyId.A));
+}
+
+static async Task RecorderFlushCancellationDoesNotLoseDataAsync()
+{
+    var store = new FakeMinuteStore { WriteDelay = TimeSpan.FromMilliseconds(60) };
+    var clock = new ManualClock(DateTimeOffset.FromUnixTimeSeconds(1_800_000_030));
+    await using var recorder = await StatisticsRecorder.CreateAsync(
+        store,
+        TimeSpan.FromHours(1),
+        clock);
+
+    recorder.RecordKeyPress(KeyId.A);
+    using var cancellation = new CancellationTokenSource();
+    cancellation.Cancel();
+
+    var failure = await CaptureAsync(() => recorder.FlushNowAsync(cancellation.Token));
+    Equal(true, failure is OperationCanceledException);
+
+    // 取消只影响这次等待，快照仍会写下去；再 flush 一次确保等到写入完成。
+    await recorder.FlushNowAsync();
+    var minuteStart = TimeBuckets.ToMinuteStart(clock.UtcNow);
+    Equal(1L, store.TotalFor(minuteStart));
+}
+
+static async Task RecorderDisposeCompletesWhenSaveKeepsFailingAsync()
+{
+    var store = new FakeMinuteStore { AlwaysFail = true };
+    var clock = new ManualClock(DateTimeOffset.FromUnixTimeSeconds(1_800_000_030));
+    var recorder = await StatisticsRecorder.CreateAsync(store, TimeSpan.FromHours(1), clock);
+    recorder.RecordKeyPress(KeyId.A);
+
+    var started = System.Diagnostics.Stopwatch.StartNew();
+    await recorder.DisposeAsync();
+    started.Stop();
+
+    // 关键：写库一直失败时 Dispose 也必须返回并清完定时器/队列，不能挂住退出流程。
+    Equal(true, started.Elapsed < TimeSpan.FromSeconds(10));
+    Equal(true, recorder.LastError is { Length: > 0 });
+    Equal(false, recorder.RecordKeyPress(KeyId.A));
+}
+
+static async Task RecorderNeverWritesStaleSnapshotAsync()
+{
+    var store = new FakeMinuteStore { WriteDelay = TimeSpan.FromMilliseconds(40) };
+    var clock = new ManualClock(DateTimeOffset.FromUnixTimeSeconds(1_800_000_030));
+    await using var recorder = await StatisticsRecorder.CreateAsync(
+        store,
+        TimeSpan.FromHours(1),
+        clock);
+
+    recorder.RecordKeyPress(KeyId.A);
+    var firstFlush = recorder.FlushNowAsync();
+
+    // 第一次写入还在“磁盘”上时继续按键，制造新旧快照重叠。
+    await Task.Delay(10);
+    for (var index = 0; index < 10; index++)
+    {
+        recorder.RecordKeyPress(KeyId.B);
+    }
+
+    var secondFlush = recorder.FlushNowAsync();
+    await Task.WhenAll(firstFlush, secondFlush);
+    await recorder.DisposeAsync();
+
+    var minuteStart = TimeBuckets.ToMinuteStart(clock.UtcNow);
+    var totals = store.WriteTotalsFor(minuteStart);
+    Equal(true, totals.Count >= 2);
+    for (var index = 1; index < totals.Count; index++)
+    {
+        // 绝对快照按桶合并后，后写的一定不比先写的小。
+        Equal(true, totals[index] >= totals[index - 1]);
+    }
+
+    Equal(11L, totals[^1]);
+    Equal(11L, store.TotalFor(minuteStart));
+}
+
+static async Task RecorderRejectsPressesAfterDisposeAsync()
+{
+    var store = new FakeMinuteStore();
+    var clock = new ManualClock(DateTimeOffset.FromUnixTimeSeconds(1_800_000_030));
+    var recorder = await StatisticsRecorder.CreateAsync(store, TimeSpan.FromHours(1), clock);
+    recorder.RecordKeyPress(KeyId.A);
+
+    await recorder.DisposeAsync();
+
+    Equal(false, recorder.RecordKeyPress(KeyId.A));
+    var minuteStart = TimeBuckets.ToMinuteStart(clock.UtcNow);
+    Equal(1L, store.TotalFor(minuteStart));
+}
+
+static async Task LegacyMigrationMergesWalBeforeMoveAsync()
+{
+    var sourceDirectory = CreateTestDirectory();
+    var destinationDirectory = CreateTestDirectory();
+    try
+    {
+        // 造一个「主库文件里没有、数据只在 WAL 中」的旧库：写入后不 checkpoint，
+        // 连接还开着时把 db + wal 复制走（等价于异常退出后留下的现场）。
+        var sourcePath = Path.Combine(sourceDirectory, "key-stats.db");
+        var sourceConnectionString = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+        {
+            DataSource = sourcePath,
+            Pooling = false,
+        }.ToString();
+
+        await using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(sourceConnectionString))
+        {
+            await connection.OpenAsync();
+            await ExecuteAsync(connection, "PRAGMA journal_mode=WAL;");
+            await ExecuteAsync(connection, "PRAGMA wal_autocheckpoint=0;");
+            await ExecuteAsync(connection, "CREATE TABLE marker(value TEXT);");
+            await ExecuteAsync(connection, "INSERT INTO marker(value) VALUES('kept');");
+            CopyDatabaseFiles(sourceDirectory, "key-stats.db", destinationDirectory, "key-stats.db");
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+        var legacyPath = Path.Combine(destinationDirectory, "key-stats.db");
+        var walPath = legacyPath + "-wal";
+        Equal(true, File.Exists(walPath));
+        Equal(true, new FileInfo(walPath).Length > 0);
+
+        var targetPath = Path.Combine(destinationDirectory, "keyana.db");
+        Equal(true, LegacyDatabaseMigrator.TryMigrate(legacyPath, targetPath, out var error));
+        Equal(true, error is null);
+        Equal(false, File.Exists(legacyPath));
+        Equal(true, File.Exists(targetPath));
+
+        await using var verify = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = targetPath,
+                Pooling = false,
+            }.ToString());
+        await verify.OpenAsync();
+        Equal("kept", await ReadScalarAsync(verify, "SELECT value FROM marker;"));
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Directory.Delete(sourceDirectory, recursive: true);
+        Directory.Delete(destinationDirectory, recursive: true);
+    }
+}
+
+static async Task LegacyMigrationRefusesWhileLockedAsync()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var legacyPath = Path.Combine(directory, "key-stats.db");
+        var connectionString = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+        {
+            DataSource = legacyPath,
+            Pooling = false,
+        }.ToString();
+
+        await using (var setup = new Microsoft.Data.Sqlite.SqliteConnection(connectionString))
+        {
+            await setup.OpenAsync();
+            await ExecuteAsync(setup, "PRAGMA journal_mode=WAL;");
+            await ExecuteAsync(setup, "CREATE TABLE marker(value TEXT);");
+            await ExecuteAsync(setup, "INSERT INTO marker(value) VALUES('kept');");
+        }
+
+        var targetPath = Path.Combine(directory, "keyana.db");
+        await using (var locker = new Microsoft.Data.Sqlite.SqliteConnection(connectionString))
+        {
+            await locker.OpenAsync();
+            await ExecuteAsync(locker, "BEGIN IMMEDIATE;");
+            await ExecuteAsync(locker, "INSERT INTO marker(value) VALUES('pending');");
+
+            // 有活动事务时 checkpoint 无法完成，迁移必须放弃并把旧库留在原处。
+            Equal(false, LegacyDatabaseMigrator.TryMigrate(legacyPath, targetPath, out var error));
+            Equal(true, error is { Length: > 0 });
+            Equal(false, File.Exists(targetPath));
+            Equal(true, File.Exists(legacyPath));
+            await ExecuteAsync(locker, "ROLLBACK;");
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Equal(true, LegacyDatabaseMigrator.TryMigrate(legacyPath, targetPath, out var secondError));
+        Equal(true, secondError is null);
+        Equal(true, File.Exists(targetPath));
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task CorruptSettingsFallBackToDefaultsAsync()
+{
+    var directory = CreateTestDirectory();
+    try
+    {
+        var settingsPath = Path.Combine(directory, "settings.json");
+        const string brokenJson = "{ \"version\": 1, \"flushIntervalSeconds\": ";
+        await File.WriteAllTextAsync(settingsPath, brokenJson);
+
+        var store = new SettingsStore(settingsPath);
+        var settings = await store.LoadOrCreateAsync();
+
+        // 设置坏掉只影响外观；数据库初始化必须继续（旧实现会在这里抛出，
+        // 导致整个会话“在采集但不入库”）。损坏文件保持原样，便于用户排查。
+        Equal(30, settings.FlushIntervalSeconds);
+        Equal("System", settings.Theme);
+        Equal(true, store.LastLoadWarning is { Length: > 0 });
+        Equal(brokenJson, await File.ReadAllTextAsync(settingsPath));
+    }
+    finally
+    {
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static async Task ExecuteAsync(Microsoft.Data.Sqlite.SqliteConnection connection, string sql)
+{
+    await using var command = connection.CreateCommand();
+    command.CommandText = sql;
+    await command.ExecuteNonQueryAsync();
+}
+
+static void CopyDatabaseFiles(
+    string sourceDirectory,
+    string sourceName,
+    string destinationDirectory,
+    string destinationName)
+{
+    // -shm 是缓存，SQLite 会按 WAL 重建；真正必须带走的是主库与 -wal。
+    foreach (var suffix in new[] { string.Empty, "-wal" })
+    {
+        var source = Path.Combine(sourceDirectory, sourceName + suffix);
+        if (File.Exists(source))
+        {
+            File.Copy(source, Path.Combine(destinationDirectory, destinationName + suffix), overwrite: true);
+        }
+    }
+}
+
+static async Task<Exception?> CaptureAsync(Func<Task> action)
+{
+    try
+    {
+        await action();
+        return null;
+    }
+    catch (Exception exception)
+    {
+        return exception;
+    }
+}
+
+
 static async Task CsvExportContainsMinuteRowsAsync()
 {
     await WithRepositoryAsync(async (directory, repository) =>
@@ -687,6 +1030,57 @@ static void CustomRangeSnapsToTenMinutes()
     Equal(new DateTimeOffset(2026, 11, 16, 10, 3, 0, TimeSpan.FromHours(8)).ToUnixTimeSeconds(), exact.EndUtc);
 }
 
+static void CustomPresetRequiresExplicitRange()
+{
+    var zone = FixedZone();
+    var threw = false;
+    try
+    {
+        TimeRangeCalculator.ForPreset(TimeRangePreset.Custom, DateTimeOffset.Now, timeZone: zone);
+    }
+    catch (ArgumentException)
+    {
+        threw = true;
+    }
+
+    Equal(true, threw);
+}
+
+static void MidnightDstTransitionUsesFirstValidInstant()
+{
+    // 造一个在本地 00:00 直接跳到 01:00 的时区（部分时区历史上有过这种规则）。
+    var daylightStart = TimeZoneInfo.TransitionTime.CreateFixedDateRule(
+        new DateTime(1, 1, 1, 0, 0, 0),
+        month: 3,
+        day: 8);
+    var daylightEnd = TimeZoneInfo.TransitionTime.CreateFixedDateRule(
+        new DateTime(1, 1, 1, 0, 0, 0),
+        month: 11,
+        day: 1);
+    var rule = TimeZoneInfo.AdjustmentRule.CreateAdjustmentRule(
+        new DateTime(2026, 1, 1),
+        new DateTime(2026, 12, 31),
+        TimeSpan.FromHours(1),
+        daylightStart,
+        daylightEnd);
+    var zone = TimeZoneInfo.CreateCustomTimeZone(
+        "Keyana.Tests.MidnightDst",
+        TimeSpan.FromHours(8),
+        "Tests +08 with midnight DST",
+        "Tests Standard",
+        "Tests Daylight",
+        [rule]);
+
+    Equal(true, zone.IsInvalidTime(new DateTime(2026, 3, 8, 0, 0, 0)));
+
+    // 当天 00:00 不存在，起点应落到第一个有效时刻 01:00（+09:00），而不是抛异常。
+    var localNow = new DateTimeOffset(2026, 3, 8, 12, 0, 0, TimeSpan.FromHours(9));
+    var today = TimeRangeCalculator.ForPreset(TimeRangePreset.Today, localNow, timeZone: zone);
+    Equal(
+        new DateTimeOffset(2026, 3, 7, 16, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds(),
+        today.StartUtc);
+}
+
 static void YesterdayRangeCoversWholeLocalDay()
 {
     var zone = FixedZone();
@@ -868,4 +1262,105 @@ static void Equal<T>(T expected, T actual)
 file sealed class ManualClock(DateTimeOffset utcNow) : IUtcClock
 {
     public DateTimeOffset UtcNow { get; set; } = utcNow;
+}
+
+/// <summary>
+/// 可注入失败、延迟与并发记录的内存存储，用来验证保存队列的重试/合并/退出语义。
+/// </summary>
+file sealed class FakeMinuteStore : IMinuteBucketStore
+{
+    private readonly object _gate = new();
+    private readonly Dictionary<long, uint[]> _buckets = [];
+    private readonly List<MinuteBucketSnapshot> _writes = [];
+    private bool _alwaysFail;
+
+    public TimeSpan WriteDelay { get; set; }
+
+    public int FailuresRemaining { get; set; }
+
+    public bool AlwaysFail
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _alwaysFail;
+            }
+        }
+        set
+        {
+            lock (_gate)
+            {
+                _alwaysFail = value;
+            }
+        }
+    }
+
+    public Task<MinuteBucketSnapshot?> GetMinuteBucketAsync(
+        long bucketStartUtc,
+        CancellationToken cancellationToken = default)
+    {
+        lock (_gate)
+        {
+            MinuteBucketSnapshot? snapshot = _buckets.TryGetValue(bucketStartUtc, out var counts)
+                ? new MinuteBucketSnapshot(bucketStartUtc, (uint[])counts.Clone())
+                : null;
+            return Task.FromResult(snapshot);
+        }
+    }
+
+    public async Task UpsertMinuteBucketAsync(
+        MinuteBucketSnapshot snapshot,
+        CancellationToken cancellationToken = default)
+    {
+        if (WriteDelay > TimeSpan.Zero)
+        {
+            await Task.Delay(WriteDelay, cancellationToken);
+        }
+
+        lock (_gate)
+        {
+            if (_alwaysFail || FailuresRemaining > 0)
+            {
+                if (!_alwaysFail)
+                {
+                    FailuresRemaining--;
+                }
+
+                throw new InvalidOperationException("模拟写入失败。");
+            }
+
+            _buckets[snapshot.BucketStartUtc] = (uint[])snapshot.Counts.Clone();
+            _writes.Add(new MinuteBucketSnapshot(snapshot.BucketStartUtc, (uint[])snapshot.Counts.Clone()));
+        }
+    }
+
+    public long TotalFor(long bucketStartUtc)
+    {
+        lock (_gate)
+        {
+            return _buckets.TryGetValue(bucketStartUtc, out var counts)
+                ? counts.Sum(count => (long)count)
+                : 0;
+        }
+    }
+
+    public int WriteCountFor(long bucketStartUtc)
+    {
+        lock (_gate)
+        {
+            return _writes.Count(write => write.BucketStartUtc == bucketStartUtc);
+        }
+    }
+
+    public IReadOnlyList<long> WriteTotalsFor(long bucketStartUtc)
+    {
+        lock (_gate)
+        {
+            return _writes
+                .Where(write => write.BucketStartUtc == bucketStartUtc)
+                .Select(write => write.TotalCount)
+                .ToArray();
+        }
+    }
 }

@@ -5,7 +5,7 @@ using Microsoft.Data.Sqlite;
 
 namespace Keyana.Storage;
 
-public sealed class KeyanaRepository : IDisposable
+public sealed class KeyanaRepository : IDisposable, IMinuteBucketStore
 {
     public const int CurrentSchemaVersion = 1;
 
@@ -189,8 +189,13 @@ public sealed class KeyanaRepository : IDisposable
         var rollupEnd = Math.Max(TimeBuckets.AlignDown(endUtc, TimeBuckets.TenMinuteSeconds), rollupStart);
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
+        // 三条 SELECT 必须落在同一个读事务里：WAL 下读事务拿到一致快照且不阻塞写者；
+        // 否则写线程可以在语句之间提交，把分钟表与十分钟汇总拼成新旧混合的结果。
+        await using var transaction =
+            (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
         await AccumulateRowsAsync(
             connection,
+            transaction,
             "minute_buckets",
             startUtc,
             rollupStart,
@@ -198,6 +203,7 @@ public sealed class KeyanaRepository : IDisposable
             cancellationToken);
         await AccumulateRowsAsync(
             connection,
+            transaction,
             "rollup_10m",
             rollupStart,
             rollupEnd,
@@ -205,11 +211,13 @@ public sealed class KeyanaRepository : IDisposable
             cancellationToken);
         await AccumulateRowsAsync(
             connection,
+            transaction,
             "minute_buckets",
             rollupEnd,
             endUtc,
             totals,
             cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         return new StatisticsAggregate(startUtc, endUtc, totals);
     }
@@ -259,15 +267,21 @@ public sealed class KeyanaRepository : IDisposable
         var rollupEnd = Math.Max(TimeBuckets.AlignDown(endUtc, TimeBuckets.TenMinuteSeconds), rollupStart);
 
         await using var connection = await OpenConnectionAsync(cancellationToken);
-        await AccumulateMinuteTotalsAsync(connection, startUtc, rollupStart, totals, cancellationToken);
+        await using var transaction =
+            (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken);
+        await AccumulateMinuteTotalsAsync(
+            connection, transaction, startUtc, rollupStart, totals, cancellationToken);
         await AccumulateBucketTotalsAsync(
             connection,
+            transaction,
             "rollup_10m",
             rollupStart,
             rollupEnd,
             totals,
             cancellationToken);
-        await AccumulateMinuteTotalsAsync(connection, rollupEnd, endUtc, totals, cancellationToken);
+        await AccumulateMinuteTotalsAsync(
+            connection, transaction, rollupEnd, endUtc, totals, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
 
         return totals
             .OrderBy(pair => pair.Key)
@@ -557,6 +571,7 @@ public sealed class KeyanaRepository : IDisposable
 
     private static async Task AccumulateRowsAsync(
         SqliteConnection connection,
+        SqliteTransaction? transaction,
         string tableName,
         long startUtc,
         long endUtc,
@@ -574,6 +589,7 @@ public sealed class KeyanaRepository : IDisposable
         }
 
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = $"""
             SELECT keymap_version, counts
             FROM {tableName}
@@ -592,6 +608,7 @@ public sealed class KeyanaRepository : IDisposable
 
     private static async Task AccumulateMinuteTotalsAsync(
         SqliteConnection connection,
+        SqliteTransaction? transaction,
         long startUtc,
         long endUtc,
         Dictionary<long, ulong> destination,
@@ -603,6 +620,7 @@ public sealed class KeyanaRepository : IDisposable
         }
 
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             SELECT bucket_start_utc, total_count
             FROM minute_buckets
@@ -621,6 +639,7 @@ public sealed class KeyanaRepository : IDisposable
 
     private static async Task AccumulateBucketTotalsAsync(
         SqliteConnection connection,
+        SqliteTransaction? transaction,
         string tableName,
         long startUtc,
         long endUtc,
@@ -633,6 +652,7 @@ public sealed class KeyanaRepository : IDisposable
         }
 
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = $"""
             SELECT bucket_start_utc, total_count
             FROM {tableName}

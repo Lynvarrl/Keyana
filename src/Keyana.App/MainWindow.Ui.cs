@@ -205,8 +205,14 @@ public partial class MainWindow
         {
             await _settingsStore.SaveAsync(_settings, _lifetimeCancellation.Token);
         }
-        catch (Exception) when (!_isClosing)
+        catch (OperationCanceledException)
         {
+            // 退出/取消不算保存失败。
+        }
+        catch (Exception exception) when (!_isClosing)
+        {
+            // 设置保存失败以前完全静默：用户改了主题/吸附，下次启动却回到旧值。
+            ErrorLog.Record("Settings.Save", exception);
         }
     }
 
@@ -220,31 +226,82 @@ public partial class MainWindow
         _settings.SnapToTenMinutes = SnapCheckBox.IsChecked == true;
         _ = SaveSettingsAsync();
 
+        // 三个自定义区间都必须从原始输入重算，不能只改主范围。
         if (_activeRangePreset == TimeRangePreset.Custom)
         {
             _ = ApplyActivePresetAsync();
+        }
+
+        if (_activityPreset == TimeRangePreset.Custom)
+        {
+            _ = ApplyActivityCustomRangeAsync();
+        }
+
+        if (_analysisPreset == TimeRangePreset.Custom)
+        {
+            _ = ApplyAnalysisCustomRangeAsync();
         }
     }
 
     private void InitializeStartupSetting()
     {
-        _startupSettingChanging = true;
         try
         {
-            StartupCheckBox.IsChecked = _startupRegistration.IsEnabledForCurrentExecutable();
+            ApplyStartupState(_startupRegistration.GetRegistrationState());
         }
         catch (Exception exception)
         {
-            StartupCheckBox.IsChecked = false;
+            _startupSettingChanging = true;
+            try
+            {
+                StartupCheckBox.IsChecked = false;
+                StartupAdminCheckBox.IsChecked = false;
+                StartupAdminCheckBox.IsEnabled = false;
+            }
+            finally
+            {
+                _startupSettingChanging = false;
+            }
+
             StartupCheckBox.ToolTip = $"读取启动项失败：{exception.Message}";
+        }
+    }
+
+    /// <summary>按任务的真实状态回填两个勾选框；调用期间抑制 Checked 事件。</summary>
+    private void ApplyStartupState(StartupRegistrationState state)
+    {
+        var canRunAsAdministrator = _startupRegistration.CanRunAsAdministrator;
+        _startupSettingChanging = true;
+        try
+        {
+            StartupCheckBox.IsChecked = state.IsRegistered;
+            StartupAdminCheckBox.IsChecked = state.IsRegistered && state.RunAsAdministrator;
+            StartupAdminCheckBox.IsEnabled = state.IsRegistered && canRunAsAdministrator;
         }
         finally
         {
             _startupSettingChanging = false;
         }
+
+        StartupCheckBox.ToolTip = state.IsRegistered
+            ? "已为当前 Windows 用户启用；程序将从当前绿色版路径静默启动。"
+            : "未启用开机自启动。";
+        StartupAdminCheckBox.ToolTip = !canRunAsAdministrator
+            ? "当前 Windows 账户不属于管理员组，无法以管理员权限自启。"
+            : !state.IsRegistered
+                ? "先启用开机自启，再选择是否以管理员权限运行。"
+                : state.RunAsAdministrator
+                    ? "当前以管理员权限自启。取消勾选会改回普通权限（不需要 UAC）。"
+                    : "当前以普通权限自启。勾选后会弹一次 UAC，改为以管理员权限自启；用于统计以管理员运行的游戏或程序。";
+
+        if (state.IsRegistered && !state.MatchesCurrentDefinition)
+        {
+            StartupCheckBox.ToolTip =
+                "已启用，但任务仍是旧策略（例如缺少电池/运行时限设置）。取消勾选再重新勾选一次即可重建。";
+        }
     }
 
-    private void StartupCheckBox_Changed(object sender, RoutedEventArgs eventArgs)
+    private async void StartupCheckBox_Changed(object sender, RoutedEventArgs eventArgs)
     {
         if (_startupSettingChanging)
         {
@@ -252,21 +309,55 @@ public partial class MainWindow
         }
 
         var requestedState = StartupCheckBox.IsChecked == true;
+        var runAsAdministrator = requestedState && StartupAdminCheckBox.IsChecked == true;
+        await ChangeStartupRegistrationAsync(requestedState, runAsAdministrator);
+    }
+
+    private async void StartupAdminCheckBox_Changed(object sender, RoutedEventArgs eventArgs)
+    {
+        if (_startupSettingChanging || StartupCheckBox.IsChecked != true)
+        {
+            return;
+        }
+
+        await ChangeStartupRegistrationAsync(enabled: true, StartupAdminCheckBox.IsChecked == true);
+    }
+
+    private async Task ChangeStartupRegistrationAsync(bool enabled, bool runAsAdministrator)
+    {
+        // 建任务可能要等 UAC，删任务要跑 schtasks：都不能阻塞 UI 线程。
+        StartupCheckBox.IsEnabled = false;
+        StartupAdminCheckBox.IsEnabled = false;
+
+        Exception? failure = null;
         try
         {
-            _startupRegistration.SetEnabled(requestedState);
-            StartupCheckBox.ToolTip = requestedState
-                ? "已为当前 Windows 用户启用；程序将从当前绿色版路径静默启动。"
-                : "未启用开机自启动。";
+            await Task.Run(() => _startupRegistration.SetEnabled(enabled, runAsAdministrator));
         }
         catch (Exception exception)
         {
-            _startupSettingChanging = true;
-            StartupCheckBox.IsChecked = !requestedState;
-            _startupSettingChanging = false;
+            failure = exception;
+        }
+
+        // 无论成功失败都按任务真实状态回填，不留下“勾了但没建/没删”的假象。
+        try
+        {
+            ApplyStartupState(await Task.Run(_startupRegistration.GetRegistrationState));
+        }
+        catch
+        {
+            // 回填失败时保持现状，错误已经足以提示用户。
+        }
+
+        StartupCheckBox.IsEnabled = true;
+        StartupAdminCheckBox.IsEnabled =
+            StartupCheckBox.IsChecked == true && _startupRegistration.CanRunAsAdministrator;
+
+        if (failure is not null)
+        {
             MessageBox.Show(
                 this,
-                $"无法修改 Windows 启动项。\n\n{exception.Message}",
+                $"无法修改 Windows 启动项。\n\n{failure.Message}",
                 "Keyana",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);

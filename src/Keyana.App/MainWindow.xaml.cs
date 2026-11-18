@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<KeyCountRow> _rows;
     private readonly ICollectionView _rowsView;
     private readonly DispatcherTimer _refreshTimer;
+    private readonly DispatcherTimer _maintenanceTimer;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly StartupRegistrationService _startupRegistration;
     private TrayIconService? _trayIcon;
@@ -49,6 +50,11 @@ public partial class MainWindow : Window
     private (long StartUtc, long EndUtc)? _selectedRange;
     private (long StartUtc, long EndUtc)? _analysisRange;
     private (long StartUtc, long EndUtc)? _activityRange;
+    // 用户在日历里选的原始本地起止。10 分钟吸附可能改写实际查询范围，但切换吸附
+    // 设置时必须从原始值重算，不能拿已经吸附过的结果再吸一次。
+    private (DateTime Start, DateTime End)? _customRangeInput;
+    private (DateTime Start, DateTime End)? _customAnalysisInput;
+    private (DateTime Start, DateTime End)? _customActivityInput;
     private TimeRangePreset _analysisPreset = TimeRangePreset.Recent30Days;
     private TimeRangePreset _activityPreset = TimeRangePreset.Recent30Days;
     private int _rangeActiveMinutes;
@@ -107,7 +113,16 @@ public partial class MainWindow : Window
         };
         _refreshTimer.Tick += RefreshTimer_Tick;
 
+        // 隐藏到托盘后只跑这个低频定时器：界面刷新停掉，但 Alt+Tab 之类丢失
+        // 松开消息的按键状态维护不能停，否则隐藏期间修饰键会一直「按着」。
+        _maintenanceTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(1),
+        };
+        _maintenanceTimer.Tick += MaintenanceTimer_Tick;
+
         ThemeManager.ThemeChanged += OnThemeChanged;
+        IsVisibleChanged += (_, _) => UpdateRefreshTimers();
         SourceInitialized += MainWindow_SourceInitialized;
         Closing += MainWindow_Closing;
         Closed += MainWindow_Closed;
@@ -117,6 +132,7 @@ public partial class MainWindow : Window
     {
         Collecting,
         Paused,
+        SaveError,
         Error,
     }
 
@@ -124,17 +140,71 @@ public partial class MainWindow : Window
     {
         ThemeManager.ApplyWindowChrome(this);
 
+        // 先建存储再开采集。旧实现反着来：初始化失败的会话里采集照常跑、界面数字
+        // 照常涨，但每一次 RecordKeyPress 都被 null 条件悄悄丢掉——用户看到的
+        // 「正在采集」是假的。现在存储没就绪就不开放采集，并停在明确的错误态。
+        await TryInitializeStorageAsync();
+
+        if (_recorder is not null)
+        {
+            StartCollection();
+        }
+    }
+
+    /// <summary>启动存储；失败时进入错误态、留下日志并显示「重试初始化」。</summary>
+    private async Task TryInitializeStorageAsync()
+    {
+        RetryStorageButton.IsEnabled = false;
         try
         {
-            var windowHandle = new WindowInteropHelper(this).Handle;
-            _rawInput = new RawInputKeyboardSource(
-                windowHandle,
-                _counter,
-                keyId => _recorder?.RecordKeyPress(keyId));
-            _refreshTimer.Start();
+            await InitializeStorageAsync(_lifetimeCancellation.Token);
+            RetryStorageButton.Visibility = Visibility.Collapsed;
+            StatusBadge.ToolTip = null;
+            _trayIcon?.SetError(null);
+            _statusMode = _counter.IsPaused ? StatusMode.Paused : StatusMode.Collecting;
+            RefreshStatusVisual();
+        }
+        catch (OperationCanceledException) when (_isClosing)
+        {
         }
         catch (Exception exception)
         {
+            if (_isClosing)
+            {
+                return;
+            }
+
+            ErrorLog.Record("Storage", exception);
+            SetStorageError(exception.Message);
+            SetErrorStatus();
+            StatusBadge.ToolTip = $"本地数据不可用：{exception.Message}\n可在「设置」页点“重试初始化”。";
+            _trayIcon?.SetError("本地数据不可用");
+            RetryStorageButton.Visibility = Visibility.Visible;
+        }
+        finally
+        {
+            RetryStorageButton.IsEnabled = true;
+        }
+    }
+
+    private void StartCollection()
+    {
+        try
+        {
+            if (_rawInput is null)
+            {
+                var windowHandle = new WindowInteropHelper(this).Handle;
+                _rawInput = new RawInputKeyboardSource(
+                    windowHandle,
+                    _counter,
+                    keyId => _recorder?.RecordKeyPress(keyId));
+            }
+
+            UpdateRefreshTimers();
+        }
+        catch (Exception exception)
+        {
+            ErrorLog.Record("RawInput", exception);
             SetErrorStatus();
             LastInputText.Text = $"采集启动失败：{exception.Message}";
             MessageBox.Show(
@@ -143,22 +213,15 @@ public partial class MainWindow : Window
                 "Keyana",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
-            return;
         }
+    }
 
-        try
+    private async void RetryStorageButton_Click(object sender, RoutedEventArgs eventArgs)
+    {
+        await TryInitializeStorageAsync();
+        if (_recorder is not null)
         {
-            await InitializeStorageAsync(_lifetimeCancellation.Token);
-        }
-        catch (OperationCanceledException) when (_isClosing)
-        {
-        }
-        catch (Exception exception)
-        {
-            if (!_isClosing)
-            {
-                SetStorageError(exception.Message);
-            }
+            StartCollection();
         }
     }
 
@@ -202,6 +265,34 @@ public partial class MainWindow : Window
         if (DateTimeOffset.UtcNow - _lastStorageUiRefresh >= TimeSpan.FromSeconds(2))
         {
             _ = RefreshStorageUiAsync();
+        }
+    }
+
+    private void MaintenanceTimer_Tick(object? sender, EventArgs eventArgs) =>
+        _rawInput?.ReconcileSystemShortcutState();
+
+    /// <summary>
+    /// 窗口可见时用 150 ms 的界面刷新；隐藏到托盘后只保留 1 s 的按键状态维护，
+    /// 停掉渲染、查询与每 2 秒一次的总量 SUM，避免常驻时白白耗电。
+    /// </summary>
+    private void UpdateRefreshTimers()
+    {
+        if (_isClosing || _rawInput is null)
+        {
+            _refreshTimer.Stop();
+            _maintenanceTimer.Stop();
+            return;
+        }
+
+        if (IsVisible)
+        {
+            _maintenanceTimer.Stop();
+            _refreshTimer.Start();
+        }
+        else
+        {
+            _refreshTimer.Stop();
+            _maintenanceTimer.Start();
         }
     }
 
@@ -254,7 +345,11 @@ public partial class MainWindow : Window
         }
         catch (Exception exception) when (!_isClosing)
         {
-            SetStorageError(exception.Message);
+            // 一次手动保存失败不等于数据不可用：计数仍在待写表里会自动重试。
+            // 不打断用户，只把原因写进日志和状态行，徽章由 UpdateStatusFromRecorder 更新。
+            ErrorLog.Record("Recorder.Flush", exception);
+            StorageStatusText.Text = $"保存失败：{exception.Message}";
+            UpdateStatusFromRecorder();
         }
         finally
         {
@@ -313,54 +408,31 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 数据库改名（key-stats.db → keyana.db）：新文件名还不存在、旧文件存在时直接改名，
-    /// 免得升级后看起来像「历史数据全丢了」。改名失败就继续用旧文件，不因此启动失败。
+    /// 数据库改名（key-stats.db → keyana.db）：交给 Storage 层先 checkpoint 再搬，
+    /// 避免把未合并的 WAL 留在旧文件名下。迁移不安全时继续用旧文件，不因此启动失败。
     /// </summary>
-    private static string PrepareDatabasePath(string dataDirectory)
+    private static string ResolveDatabasePath(string dataDirectory)
     {
         var databasePath = Path.Combine(dataDirectory, "keyana.db");
         var legacyPath = Path.Combine(dataDirectory, "key-stats.db");
-        if (File.Exists(databasePath) || !File.Exists(legacyPath))
+        if (!File.Exists(legacyPath) || File.Exists(databasePath))
         {
             return databasePath;
         }
 
-        try
+        if (LegacyDatabaseMigrator.TryMigrate(legacyPath, databasePath, out var error))
         {
-            File.Move(legacyPath, databasePath);
-            // WAL 模式下 db 旁边还有 -wal / -shm，一起改名才算完整迁移。
-            MoveIfExists(legacyPath + "-wal", databasePath + "-wal");
-            MoveIfExists(legacyPath + "-shm", databasePath + "-shm");
             return databasePath;
         }
-        catch (IOException)
-        {
-            return legacyPath;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return legacyPath;
-        }
-    }
 
-    private static void MoveIfExists(string source, string destination)
-    {
-        if (!File.Exists(source))
+        if (error is not null)
         {
-            return;
+            ErrorLog.Record(
+                "Storage.Migration",
+                new InvalidOperationException($"旧数据库迁移失败，本次继续使用 {legacyPath}：{error}"));
         }
 
-        try
-        {
-            File.Move(source, destination, overwrite: true);
-        }
-        catch (IOException)
-        {
-            // 旁挂文件搬不动不影响主库，SQLite 会按需重建。
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
+        return legacyPath;
     }
 
     private async Task InitializeStorageAsync(CancellationToken cancellationToken)
@@ -370,13 +442,21 @@ public partial class MainWindow : Window
         var settings = await settingsStore.LoadOrCreateAsync(cancellationToken);
         _settingsStore = settingsStore;
         _settings = settings;
+        if (settingsStore.LastLoadWarning is { } warning)
+        {
+            // 设置坏了只降级外观，不阻断数据库初始化；但必须留下痕迹。
+            ErrorLog.Record("Settings", new InvalidDataException(warning));
+            StorageStatusText.ToolTip = warning;
+        }
+
         ApplySettingsToUi(settings);
 
-        var repository = new KeyanaRepository(PrepareDatabasePath(dataDirectory));
+        var repository = new KeyanaRepository(ResolveDatabasePath(dataDirectory));
+        StatisticsRecorder? recorder = null;
         try
         {
             await repository.InitializeAsync(cancellationToken);
-            var recorder = await StatisticsRecorder.CreateAsync(
+            recorder = await StatisticsRecorder.CreateAsync(
                 repository,
                 TimeSpan.FromSeconds(settings.FlushIntervalSeconds),
                 cancellationToken: cancellationToken);
@@ -403,6 +483,20 @@ public partial class MainWindow : Window
         }
         catch
         {
+            // 初始化后半段失败（刷新 UI、读区间）时 recorder 已经启动；不在这里收掉，
+            // 重试会再建一个写入器，两个绝对快照互相覆盖。所有权在成功路径上转移给
+            // 窗口字段，失败路径必须由这里释放。
+            if (ReferenceEquals(_recorder, recorder))
+            {
+                _recorder = null;
+                _repository = null;
+            }
+
+            if (recorder is not null)
+            {
+                await recorder.DisposeAsync();
+            }
+
             repository.Dispose();
             throw;
         }
@@ -441,6 +535,7 @@ public partial class MainWindow : Window
             DataPathText.Text = _repository.DatabasePath;
             DataSizeText.Text = $"数据库大小：{sizeMegabytes:F2} MB";
             StorageStatusText.Text = $"上次保存 {savedText}{errorText}";
+            UpdateStatusFromRecorder();
             _lastStorageUiRefresh = DateTimeOffset.UtcNow;
 
             if (_activeRangePreset != TimeRangePreset.Custom)
@@ -493,6 +588,7 @@ public partial class MainWindow : Window
         var (text, foreground, dot) = _statusMode switch
         {
             StatusMode.Paused => ("已暂停", "WarningBrush", "WarningBrush"),
+            StatusMode.SaveError => ("保存异常", "DangerBrush", "DangerBrush"),
             StatusMode.Error => ("启动失败", "DangerBrush", "DangerBrush"),
             _ => ("正在采集", "SuccessBrush", "SuccessBrush"),
         };
@@ -501,6 +597,31 @@ public partial class MainWindow : Window
         StatusText.Foreground = FindBrush(foreground);
         StatusBadge.Background = Brushes.Transparent;
         StatusDot.Fill = FindBrush(dot);
+    }
+
+    /// <summary>
+    /// 保存失败时让状态徽章和托盘如实反映「采集中但没写进库」，而不是继续显示绿色
+    /// 「正在采集」。写入恢复后自动回落（暂停状态优先保持）。
+    /// </summary>
+    private void UpdateStatusFromRecorder()
+    {
+        if (_isClosing || _statusMode == StatusMode.Error)
+        {
+            return;
+        }
+
+        if (_recorder?.LastError is { Length: > 0 })
+        {
+            _statusMode = StatusMode.SaveError;
+            _trayIcon?.SetError("保存异常");
+        }
+        else
+        {
+            _statusMode = _counter.IsPaused ? StatusMode.Paused : StatusMode.Collecting;
+            _trayIcon?.SetError(null);
+        }
+
+        RefreshStatusVisual();
     }
 
     private Brush FindBrush(string key) =>
@@ -535,6 +656,11 @@ public partial class MainWindow : Window
         Topmost = true;
         Topmost = false;
         Focus();
+
+        // 隐藏期间停掉的界面刷新在这里补一次，避免刚打开时看到十几分钟前的数字。
+        UpdateRefreshTimers();
+        RefreshTimer_Tick(null, EventArgs.Empty);
+        _ = RefreshStorageUiAsync(force: true);
     }
 
     private void TogglePauseFromTray() => SetPaused(!_counter.IsPaused);
@@ -567,6 +693,7 @@ public partial class MainWindow : Window
         _isClosing = true;
         IsEnabled = false;
         _refreshTimer.Stop();
+        _maintenanceTimer.Stop();
         _rawInput?.Dispose();
         _rawInput = null;
         _lifetimeCancellation.Cancel();
@@ -578,9 +705,11 @@ public partial class MainWindow : Window
                 await _recorder.DisposeAsync();
             }
         }
-        catch
+        catch (Exception exception)
         {
-            // 退出阶段无法安全恢复界面；已经提交的 SQLite 事务仍保持一致。
+            // 退出阶段无法安全恢复界面，但最后一次保存失败必须留下痕迹，
+            // 否则用户只会觉得「今天少记了一些」。
+            ErrorLog.Record("Recorder.Dispose", exception);
         }
 
         _recorder = null;
@@ -606,6 +735,8 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closed(object? sender, EventArgs eventArgs)
     {
+        _refreshTimer.Stop();
+        _maintenanceTimer.Stop();
         ThemeManager.ThemeChanged -= OnThemeChanged;
         _trayIcon?.Dispose();
         _trayIcon = null;

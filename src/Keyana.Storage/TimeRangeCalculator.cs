@@ -43,6 +43,7 @@ public static class TimeRangeCalculator
 
         return preset switch
         {
+            TimeRangePreset.Today => Today(zone, localNow),
             TimeRangePreset.Yesterday => Yesterday(zone, localNow),
             TimeRangePreset.Recent10 => (endUtc - TimeBuckets.TenMinuteSeconds, endUtc),
             TimeRangePreset.Recent7Days => (endUtc - (7L * 24 * 60 * TimeBuckets.MinuteSeconds), endUtc),
@@ -51,7 +52,12 @@ public static class TimeRangeCalculator
             TimeRangePreset.All => storedRange is null
                 ? (currentMinute, endUtc)
                 : (Math.Min(storedRange.StartUtc, currentMinute), Math.Max(storedRange.EndUtc, endUtc)),
-            _ => Today(zone, localNow),
+            // 自定义区间必须用 ForCustom 从用户选的原点/终点算。旧实现把它落进
+            // 默认分支当成「今天」，切换吸附设置时会把用户选的范围静默改掉。
+            TimeRangePreset.Custom => throw new ArgumentException(
+                "自定义区间请使用 ForCustom，而不是 ForPreset。",
+                nameof(preset)),
+            _ => throw new ArgumentOutOfRangeException(nameof(preset), preset, "未知的时间范围预设。"),
         };
     }
 
@@ -109,7 +115,24 @@ public static class TimeRangeCalculator
     private static DateTimeOffset LocalMidnightUtc(TimeZoneInfo zone, DateTime localDate)
     {
         var midnightLocal = new DateTime(localDate.Year, localDate.Month, localDate.Day, 0, 0, 0, DateTimeKind.Unspecified);
-        return new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(midnightLocal, zone), TimeSpan.Zero);
+        if (!zone.IsInvalidTime(midnightLocal))
+        {
+            return new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(midnightLocal, zone), TimeSpan.Zero);
+        }
+
+        // 极少数时区的夏令时切换发生在本地午夜（00:00 直接跳到 01:00），这一天
+        // 并不存在 00:00。取当天第一个有效时刻，避免「今天/昨天」在这里直接抛异常。
+        for (var minutes = 1; minutes <= 180; minutes++)
+        {
+            var candidate = midnightLocal.AddMinutes(minutes);
+            if (!zone.IsInvalidTime(candidate))
+            {
+                return new DateTimeOffset(TimeZoneInfo.ConvertTimeToUtc(candidate, zone), TimeSpan.Zero);
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"无法确定 {localDate:yyyy-MM-dd} 在时区 {zone.Id} 的起始时刻。");
     }
 
     private static DateTime AlignLocalDown(DateTime value, int minutes) =>

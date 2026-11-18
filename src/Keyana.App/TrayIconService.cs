@@ -8,6 +8,8 @@ internal sealed class TrayIconService : IDisposable
     private readonly System.Windows.Forms.ToolStripMenuItem _pauseItem;
     private readonly Icon? _applicationIcon;
     private bool _hiddenNotificationShown;
+    private bool _isPaused;
+    private string? _errorText;
 
     public TrayIconService(Action open, Action togglePause, Action saveNow, Action exit)
     {
@@ -45,8 +47,29 @@ internal sealed class TrayIconService : IDisposable
 
     public void SetPaused(bool isPaused)
     {
+        _isPaused = isPaused;
         _pauseItem.Text = isPaused ? "恢复采集" : "暂停采集";
-        _notifyIcon.Text = isPaused ? "Keyana · 已暂停" : "Keyana · 正在采集";
+        UpdateTooltip();
+    }
+
+    /// <summary>显示/清除当前故障（保存失败、存储不可用）。null 表示恢复正常。</summary>
+    public void SetError(string? message)
+    {
+        if (string.Equals(_errorText, message, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _errorText = message;
+        UpdateTooltip();
+    }
+
+    private void UpdateTooltip()
+    {
+        // NotifyIcon.Text 上限 63 字符，这里只放短状态，详细原因留在主窗口。
+        _notifyIcon.Text = _errorText is { Length: > 0 } error
+            ? $"Keyana · {error}"
+            : _isPaused ? "Keyana · 已暂停" : "Keyana · 正在采集";
     }
 
     public void ShowHiddenNotification()

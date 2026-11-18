@@ -43,7 +43,12 @@ public partial class MainWindow
     {
         var range = await ResolveAnalysisPresetRangeAsync(_analysisPreset);
         _analysisRange = range;
-        AnalysisRangePicker.SetRangeUtc(range.StartUtc, range.EndUtc);
+        // 用户正在日历里选新的起止时不要回写，否则每 5 秒会把他的编辑冲掉。
+        if (!AnalysisRangePicker.IsEditorOpen)
+        {
+            AnalysisRangePicker.SetRangeUtc(range.StartUtc, range.EndUtc);
+        }
+
         AnalysisRangeHintText.Text = $"{FormatRangeShort(range)} · 独立于概览页";
     }
 
@@ -60,11 +65,18 @@ public partial class MainWindow
 
     private async void AnalysisRangePicker_RangeApplied(object? sender, EventArgs eventArgs)
     {
-        var range = TimeRangeCalculator.ForCustom(
-            AnalysisRangePicker.RangeStart,
-            AnalysisRangePicker.RangeEnd,
-            _settings?.SnapToTenMinutes ?? true);
+        _customAnalysisInput = (AnalysisRangePicker.RangeStart, AnalysisRangePicker.RangeEnd);
+        await ApplyAnalysisCustomRangeAsync();
+    }
 
+    private async Task ApplyAnalysisCustomRangeAsync()
+    {
+        if (_customAnalysisInput is not { } input)
+        {
+            return;
+        }
+
+        var range = ResolveCustomRange(input);
         if (range.EndUtc <= range.StartUtc)
         {
             AnalysisRangeHintText.Text = "结束时间必须晚于开始时间。";
@@ -98,7 +110,7 @@ public partial class MainWindow
 
     private async Task RefreshAnalysisAsync(bool force = false)
     {
-        if (_analysisRefreshRunning || _repository is null || _analysisRange is not { } range)
+        if (_analysisRefreshRunning || _repository is null)
         {
             return;
         }
@@ -111,6 +123,18 @@ public partial class MainWindow
         _analysisRefreshRunning = true;
         try
         {
+            // 分析页可能整夜挂在屏幕上：相对预设每次刷新都按当前时钟重算区间，
+            // 否则「近 30 天」会停在打开页面那一刻，跨天后少算一天。
+            if (_analysisPreset != TimeRangePreset.Custom)
+            {
+                await SyncAnalysisRangeFromPresetAsync();
+            }
+
+            if (_analysisRange is not { } range)
+            {
+                return;
+            }
+
             // 分析页是「看结果」的地方，先把当前这一分钟落盘，避免刚切过来时数字偏小。
             if (force && _recorder is not null)
             {

@@ -732,6 +732,9 @@
 
                                 <CheckBox x:Name="StartupCheckBox" Content="登录 Windows 后自动启动"
                                           Margin="0,18,0,0" Checked="StartupCheckBox_Changed" Unchecked="StartupCheckBox_Changed" />
+                                <CheckBox x:Name="StartupAdminCheckBox" Content="以管理员权限自启"
+                                          Margin="24,8,0,0" IsEnabled="False"
+                                          Checked="StartupAdminCheckBox_Changed" Unchecked="StartupAdminCheckBox_Changed" />
                                 <CheckBox x:Name="SnapCheckBox" Content="自定义范围向外吸附到 10 分钟边界"
                                           Margin="0,12,0,0" Checked="SnapCheckBox_Changed" Unchecked="SnapCheckBox_Changed" />
 
@@ -749,6 +752,10 @@
                                     <Button x:Name="SaveNowButton" Content="立即保存"
                                             Style="{StaticResource SecondaryButtonStyle}" Padding="14,7"
                                             IsEnabled="False" Click="SaveNowButton_Click" />
+                                    <Button x:Name="RetryStorageButton" Content="重试初始化"
+                                            Style="{StaticResource SecondaryButtonStyle}" Padding="14,7"
+                                            Visibility="Collapsed" Margin="8,0,0,0"
+                                            Click="RetryStorageButton_Click" />
                                     <Button x:Name="ExportButton" Content="导出 CSV"
                                             Style="{StaticResource SecondaryButtonStyle}" Padding="14,7"
                                             IsEnabled="False" Margin="8,0,0,0" Click="ExportButton_Click" />

@@ -28,6 +28,14 @@ public partial class App : System.Windows.Application
     {
         base.OnStartup(eventArgs);
 
+        // 隐藏 helper：被 runas 提权后用来创建管理员自启任务。必须放在单实例检查
+        // 与窗口创建之前——主实例通常已经在跑，helper 不能被当成第二个实例对待。
+        if (StartupRegistrationService.ParseHelperArgument(eventArgs.Args) is { } helperRequest)
+        {
+            Shutdown(StartupRegistrationService.RunRegistrationHelper(helperRequest));
+            return;
+        }
+
         RegisterGlobalExceptionHandling();
         // 必须在创建窗口前装好主题，否则第一帧会按浅色画完再跳成深色。
         Theme.ThemeManager.Initialize();
