@@ -270,13 +270,15 @@ public partial class MainWindow
     /// <summary>按任务的真实状态回填两个勾选框；调用期间抑制 Checked 事件。</summary>
     private void ApplyStartupState(StartupRegistrationState state)
     {
-        var canRunAsAdministrator = _startupRegistration.CanRunAsAdministrator;
         _startupSettingChanging = true;
         try
         {
             StartupCheckBox.IsChecked = state.IsRegistered;
             StartupAdminCheckBox.IsChecked = state.IsRegistered && state.RunAsAdministrator;
-            StartupAdminCheckBox.IsEnabled = state.IsRegistered && canRunAsAdministrator;
+            // 不根据当前令牌是否含管理员组来禁用：UAC 提权的是创建任务的 helper，
+            // 不是主程序；普通权限的主程序完全有权发起这次提权。是否真的能提权，
+            // 由用户点选后的 UAC 结果决定，失败会回滚并提示。
+            StartupAdminCheckBox.IsEnabled = state.IsRegistered;
         }
         finally
         {
@@ -286,13 +288,11 @@ public partial class MainWindow
         StartupCheckBox.ToolTip = state.IsRegistered
             ? "已为当前 Windows 用户启用；程序将从当前绿色版路径静默启动。"
             : "未启用开机自启动。";
-        StartupAdminCheckBox.ToolTip = !canRunAsAdministrator
-            ? "当前 Windows 账户不属于管理员组，无法以管理员权限自启。"
-            : !state.IsRegistered
-                ? "先启用开机自启，再选择是否以管理员权限运行。"
-                : state.RunAsAdministrator
-                    ? "当前以管理员权限自启。取消勾选会改回普通权限（不需要 UAC）。"
-                    : "当前以普通权限自启。勾选后会弹一次 UAC，改为以管理员权限自启；用于统计以管理员运行的游戏或程序。";
+        StartupAdminCheckBox.ToolTip = !state.IsRegistered
+            ? "先启用开机自启，再选择是否以管理员权限运行。"
+            : state.RunAsAdministrator
+                ? "当前以管理员权限自启。取消勾选会改回普通权限（不需要 UAC）。"
+                : "当前以普通权限自启。勾选后会弹一次 UAC；需要当前 Windows 账户属于管理员组，否则登录后仍以普通权限运行。";
 
         if (state.IsRegistered && !state.MatchesCurrentDefinition)
         {
@@ -350,8 +350,7 @@ public partial class MainWindow
         }
 
         StartupCheckBox.IsEnabled = true;
-        StartupAdminCheckBox.IsEnabled =
-            StartupCheckBox.IsChecked == true && _startupRegistration.CanRunAsAdministrator;
+        StartupAdminCheckBox.IsEnabled = StartupCheckBox.IsChecked == true;
 
         if (failure is not null)
         {

@@ -785,46 +785,6 @@ internal sealed class StartupRegistrationService
         }
     }
 
-    /// <summary>
-    /// 当前账户是否属于本机 Administrators 组。
-    ///
-    /// 不能用 <see cref="WindowsPrincipal.IsInRole(WindowsBuiltInRole)"/>：UAC 过滤后的
-    /// 管理员令牌里该组是 deny-only，IsInRole 会返回 false，但组 SID 仍出现在
-    /// <see cref="WindowsIdentity.Groups"/> 里。标准用户则完全不含这个 SID。
-    /// </summary>
-    public bool CanRunAsAdministrator
-    {
-        get
-        {
-            try
-            {
-                using var identity = WindowsIdentity.GetCurrent();
-                if (identity.Groups is null)
-                {
-                    return false;
-                }
-
-                var administrators = new SecurityIdentifier(
-                    WellKnownSidType.BuiltinAdministratorsSid,
-                    null);
-                foreach (var group in identity.Groups)
-                {
-                    if (group.IsValidTargetType(typeof(SecurityIdentifier)) &&
-                        ((SecurityIdentifier)group).Equals(administrators))
-                    {
-                        return true;
-                    }
-                }
-
-                return false;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-    }
-
     private static bool IsProcessElevated()
     {
         try
