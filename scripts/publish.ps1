@@ -1,5 +1,7 @@
 ﻿param(
-    [string]$OutputDirectory = "artifacts"
+    [string]$OutputDirectory = "artifacts",
+    # 只构建框架依赖的精简版，跳过自带运行时的完整版。本地调试时省一半时间与磁盘。
+    [switch]$LiteOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,14 +72,34 @@ function Assert-PublishOutput {
     }
 }
 
-# 压缩后再查一次包内容，防止 Compress-Archive 的路径展开和预期不一致。
+# 用 .NET 的 ZipFile 而不是 Compress-Archive：Windows PowerShell 5.1 的
+# Compress-Archive 会把子目录写成反斜杠（licenses\Apache-2.0.txt），不符合 ZIP
+# 规范，部分解压工具会把整个路径当成文件名。ZipFile 写标准正斜杠。
+function New-PackageZip {
+    param(
+        [Parameter(Mandatory)][string]$SourceDirectory,
+        [Parameter(Mandatory)][string]$DestinationPath)
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    if (Test-Path -LiteralPath $DestinationPath) {
+        Remove-Item -LiteralPath $DestinationPath -Force
+    }
+
+    [System.IO.Compression.ZipFile]::CreateFromDirectory(
+        $SourceDirectory,
+        $DestinationPath,
+        [System.IO.Compression.CompressionLevel]::Optimal,
+        $false)
+}
+
+# 压缩后再查一次包内容，防止 ZIP 条目路径与预期不一致。
 function Assert-ZipEntries {
     param([Parameter(Mandatory)][string]$ZipPath, [Parameter(Mandatory)][string[]]$Entries)
 
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
     try {
-        $names = $archive.Entries | ForEach-Object { $_.FullName }
+        $names = $archive.Entries | ForEach-Object { $_.FullName.Replace('\', '/') }
         foreach ($entry in $Entries) {
             if ($names -notcontains $entry) {
                 throw "压缩包 $([System.IO.Path]::GetFileName($ZipPath)) 缺少 $entry。"
@@ -101,7 +123,8 @@ $fullOutput = Join-Path $artifactsRoot "v$version-full"
 $liteOutput = Join-Path $artifactsRoot "v$version-lite"
 
 New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
-foreach ($target in @($fullOutput, $liteOutput)) {
+$outputsToClean = if ($LiteOnly) { @($liteOutput) } else { @($fullOutput, $liteOutput) }
+foreach ($target in $outputsToClean) {
     $resolvedTarget = [System.IO.Path]::GetFullPath($target)
     if (-not $resolvedTarget.StartsWith($artifactsRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
         throw "拒绝清理 artifacts 目录以外的路径：$resolvedTarget"
@@ -112,19 +135,21 @@ foreach ($target in @($fullOutput, $liteOutput)) {
     }
 }
 
-Invoke-DotNet @(
-    "publish", $projectPath, "-c", "Release", "-r", "win-x64", "--self-contained", "true",
-    "-p:PublishSingleFile=true",
-    "-p:IncludeNativeLibrariesForSelfExtract=true",
-    "-p:EnableCompressionInSingleFile=true",
-    "-p:DebugType=None",
-    "-p:DebugSymbols=false",
-    "-o", $fullOutput
-)
+if (-not $LiteOnly) {
+    Invoke-DotNet @(
+        "publish", $projectPath, "-c", "Release", "-r", "win-x64", "--self-contained", "true",
+        "-p:PublishSingleFile=true",
+        "-p:IncludeNativeLibrariesForSelfExtract=true",
+        "-p:EnableCompressionInSingleFile=true",
+        "-p:DebugType=None",
+        "-p:DebugSymbols=false",
+        "-o", $fullOutput
+    )
 
-New-Item -ItemType Directory -Path (Join-Path $fullOutput "Data") -Force | Out-Null
-Copy-PackageDocuments -Destination $fullOutput
-Assert-PublishOutput -Path $fullOutput -Label "完整版"
+    New-Item -ItemType Directory -Path (Join-Path $fullOutput "Data") -Force | Out-Null
+    Copy-PackageDocuments -Destination $fullOutput
+    Assert-PublishOutput -Path $fullOutput -Label "完整版"
+}
 
 Invoke-DotNet @(
     "publish", $projectPath, "-c", "Release", "-r", "win-x64", "--self-contained", "false",
@@ -139,21 +164,31 @@ New-Item -ItemType Directory -Path (Join-Path $liteOutput "Data") -Force | Out-N
 Copy-PackageDocuments -Destination $liteOutput
 Assert-PublishOutput -Path $liteOutput -Label "精简版"
 
-$fullZip = Join-Path $artifactsRoot "Keyana-V$version-full-win-x64.zip"
+$builtZips = @()
+$requiredEntries = @(
+    "Keyana.exe", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/Apache-2.0.txt")
+
+if (-not $LiteOnly) {
+    $fullZip = Join-Path $artifactsRoot "Keyana-V$version-full-win-x64.zip"
+    New-PackageZip -SourceDirectory $fullOutput -DestinationPath $fullZip
+    Assert-ZipEntries -ZipPath $fullZip -Entries $requiredEntries
+    $builtZips += $fullZip
+}
+
 $liteZip = Join-Path $artifactsRoot "Keyana-V$version-lite-win-x64.zip"
-Compress-Archive -Path (Join-Path $fullOutput "*") -DestinationPath $fullZip -CompressionLevel Optimal -Force
-Compress-Archive -Path (Join-Path $liteOutput "*") -DestinationPath $liteZip -CompressionLevel Optimal -Force
+New-PackageZip -SourceDirectory $liteOutput -DestinationPath $liteZip
+Assert-ZipEntries -ZipPath $liteZip -Entries $requiredEntries
+$builtZips += $liteZip
 
-Assert-ZipEntries -ZipPath $fullZip -Entries @(
-    "Keyana.exe", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/Apache-2.0.txt")
-Assert-ZipEntries -ZipPath $liteZip -Entries @(
-    "Keyana.exe", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "licenses/Apache-2.0.txt")
-
-$checksums = @($fullZip, $liteZip) | ForEach-Object {
+$checksums = $builtZips | ForEach-Object {
     $hash = Get-FileHash -LiteralPath $_ -Algorithm SHA256
     "$($hash.Hash.ToLowerInvariant())  $([System.IO.Path]::GetFileName($_))"
 }
 [System.IO.File]::WriteAllLines((Join-Path $artifactsRoot "SHA256SUMS.txt"), $checksums)
 
-Write-Host "发布完成：$artifactsRoot"
+if ($LiteOnly) {
+    Write-Host "精简版发布完成：$artifactsRoot"
+} else {
+    Write-Host "发布完成：$artifactsRoot"
+}
 

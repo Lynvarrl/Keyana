@@ -25,6 +25,8 @@
 - 聚合查询的三段 SELECT 放进同一个只读事务，跨分钟表与十分钟汇总不再读到新旧混合快照；
 - 发布包补 `LICENSE`、`THIRD_PARTY_NOTICES.md` 与 `licenses/` 下的许可证全文，
   发布脚本在压缩前后校验这些文件与压缩包条目；
+- 发布脚本支持 `-LiteOnly`，只构建框架依赖的精简版，便于本地调试；压缩改用
+  .NET `ZipFile`，避免 PowerShell 5.1 的 `Compress-Archive` 把子目录写成反斜杠；
 - 修复自启任务的两处兼容问题：`schtasks /Query /XML` 输出编码不一致会导致
   “任务其实存在却查询不到”，现在按原始字节尝试 UTF-16/UTF-8/系统代码页解析；
   普通权限无法删除/覆盖旧版以最高权限创建的任务，现在会自动走一次 UAC helper。
