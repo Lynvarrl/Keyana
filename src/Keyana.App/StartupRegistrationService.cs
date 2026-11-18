@@ -96,7 +96,7 @@ internal sealed class StartupRegistrationService
         return new StartupRegistrationState(
             IsRegistered: true,
             RunAsAdministrator: runAsAdministrator,
-            MatchesCurrentDefinition: task.MatchesDefinition(_executablePath, runAsAdministrator));
+            MatchesCurrentDefinition: task.MatchesDefinition(_executablePath, runAsAdministrator, out _));
     }
 
     public void SetEnabled(bool enabled, bool runAsAdministrator = false)
@@ -107,19 +107,43 @@ internal sealed class StartupRegistrationService
             return;
         }
 
-        if (runAsAdministrator && !IsProcessElevated())
+        // 先删掉旧任务再建：旧版本可能以最高权限创建它，/Create /F 覆盖同样需要
+        // 对该任务的写权限，普通权限会直接被拒。走提权 helper 时由 helper 自己删，
+        // 避免连续弹两次 UAC。
+        var createElevated = runAsAdministrator && !IsProcessElevated();
+        if (!createElevated && TryQueryTask(out _))
+        {
+            RemoveStartupTask();
+        }
+
+        if (createElevated)
         {
             // 当前是普通权限：通过 runas 启动本程序的隐藏 helper（一次 UAC），
             // 由提权后的进程自己生成并导入任务定义。
-            RunElevatedRegistrationHelper();
+            RunElevatedRegistrationHelper(runAsAdministrator: true);
             VerifyTaskOrThrow(runAsAdministrator: true);
             // 任务确认可用后再清理旧版 Run 键。
             RemoveLegacyRunKey();
             return;
         }
 
-        CreateTaskLocally(runAsAdministrator);
+        try
+        {
+            CreateTaskLocally(runAsAdministrator);
+        }
+        catch (InvalidOperationException exception) when (!IsProcessElevated() && IsAccessDenied(exception))
+        {
+            // 个别机器/组策略不允许普通用户创建计划任务：退回一次 UAC helper，
+            // 仍按用户选择的权限模式创建，而不是直接失败。
+            RunElevatedRegistrationHelper(runAsAdministrator);
+            VerifyTaskOrThrow(runAsAdministrator);
+            RemoveLegacyRunKey();
+        }
     }
+
+    private static bool IsAccessDenied(Exception exception) =>
+        exception.Message.Contains("拒绝访问", StringComparison.OrdinalIgnoreCase) ||
+        exception.Message.Contains("Access is denied", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// 供提权 helper 调用：当前进程已经是管理员，直接把任务建出来。
@@ -141,14 +165,57 @@ internal sealed class StartupRegistrationService
                 return 3;
             }
 
-            new StartupRegistrationService(executablePath, request.UserSid)
-                .CreateTaskLocally(request.RunAsAdministrator);
+            var service = new StartupRegistrationService(executablePath, request.UserSid);
+            // helper 已经是提权进程：先把旧任务（可能是最高权限创建的）删掉，
+            // 再按新定义创建，避免 /Create /F 被旧任务的 ACL 拒绝。
+            service.DeleteTaskDirectly();
+            service.CreateTaskLocally(request.RunAsAdministrator);
             return 0;
         }
         catch
         {
             return 1;
         }
+    }
+
+    /// <summary>是否是提权删除任务的 helper 调用。</summary>
+    public static bool IsUnregistrationHelperArgument(IReadOnlyList<string> arguments) =>
+        arguments.Any(argument =>
+            argument.Equals("--unregister-autostart", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>供提权 helper 调用：删除自启任务。返回进程退出码，0 表示成功。</summary>
+    public static int RunUnregistrationHelper()
+    {
+        try
+        {
+            if (!IsProcessElevated())
+            {
+                return 2;
+            }
+
+            var executablePath = Environment.ProcessPath;
+            if (string.IsNullOrWhiteSpace(executablePath))
+            {
+                return 3;
+            }
+
+            new StartupRegistrationService(executablePath).DeleteTaskDirectly();
+            return 0;
+        }
+        catch
+        {
+            return 1;
+        }
+    }
+
+    private void DeleteTaskDirectly()
+    {
+        if (TryQueryTask(out _))
+        {
+            RunSchtasksCaptured($"/Delete /F /TN \"{TaskName}\"", "删除自启动任务");
+        }
+
+        RemoveLegacyRunKey();
     }
 
     /// <summary>
@@ -194,23 +261,29 @@ internal sealed class StartupRegistrationService
 
     private void VerifyTaskOrThrow(bool runAsAdministrator)
     {
-        if (!TryQueryTask(out var task) || !task.MatchesDefinition(_executablePath, runAsAdministrator))
+        var label = runAsAdministrator ? "管理员自启" : "自启动";
+        if (!TryQueryTask(out var task))
         {
-            throw new InvalidOperationException(runAsAdministrator
-                ? "管理员自启任务创建后校验失败：任务缺失、运行级别不是最高权限，或电池/运行时限策略未生效。"
-                : "自启动任务创建后校验失败：任务缺失、运行级别不是最小权限，或电池/运行时限策略未生效。");
+            throw new InvalidOperationException($"{label}任务创建后查询不到（schtasks /Query 失败或任务未注册）。");
+        }
+
+        if (!task.MatchesDefinition(_executablePath, runAsAdministrator, out var mismatch))
+        {
+            throw new InvalidOperationException($"{label}任务校验失败：{mismatch}。");
         }
     }
 
-    /// <summary>通过 UAC 启动本程序的 helper 来创建最高权限任务。</summary>
-    private void RunElevatedRegistrationHelper()
+    /// <summary>通过 UAC 启动本程序的 helper 来创建自启任务。</summary>
+    private void RunElevatedRegistrationHelper(bool runAsAdministrator)
     {
         try
         {
             var psi = new ProcessStartInfo
             {
                 FileName = _executablePath,
-                Arguments = $"--register-autostart=highest --user-sid={_userId}",
+                Arguments = runAsAdministrator
+                    ? $"--register-autostart=highest --user-sid={_userId}"
+                    : $"--register-autostart=least --user-sid={_userId}",
                 UseShellExecute = true, // runas 动词必须走 ShellExecute。
                 Verb = "runas",
                 WindowStyle = ProcessWindowStyle.Hidden,
@@ -233,7 +306,8 @@ internal sealed class StartupRegistrationService
                     _ => "任务计划服务拒绝了创建请求，或任务校验未通过",
                 };
                 throw new InvalidOperationException(
-                    $"管理员自启任务创建失败：{reason}（helper 退出码 {process.ExitCode}）。" +
+                    $"{(runAsAdministrator ? "管理员自启" : "自启动")}任务创建失败：{reason}" +
+                    $"（helper 退出码 {process.ExitCode}）。" +
                     "如果反复失败，可以先以管理员身份启动 Keyana，再重新勾选。");
             }
         }
@@ -268,17 +342,23 @@ internal sealed class StartupRegistrationService
         {
             SaveTaskXml(BuildTaskXml(runAsAdministrator), tempXmlPath);
 
-            RunSchtasksCaptured($"/Create /F /TN \"{TaskName}\" /XML \"{tempXmlPath}\"");
+            RunSchtasksCaptured(
+                $"/Create /F /TN \"{TaskName}\" /XML \"{tempXmlPath}\"",
+                "创建自启动任务");
 
             // 结果回读校验：不依赖上一步的退出码文本，直接确认任务确实存在、路径与
             // 运行级别正确，并确认电池/时限/补跑策略生效，避免“命令看似成功但任务
-            // 仍带默认限制（如电池不自启）”。
-            if (!TryQueryTask(out var task) || !task.MatchesDefinition(_executablePath, runAsAdministrator))
+            // 仍带默认限制（如电池不自启）”。失败时把具体是哪一项不匹配写进消息和日志。
+            if (!TryQueryTask(out var task))
             {
                 TryDeleteTask();
-                throw new InvalidOperationException(runAsAdministrator
-                    ? "管理员自启任务创建后校验失败：任务缺失、运行级别不是最高权限、执行路径与当前程序不一致，或电池/运行时限策略未生效。已回滚本次创建。"
-                    : "自启动任务创建后校验失败：任务缺失、运行级别不是最小权限、执行路径与当前程序不一致，或电池/运行时限策略未生效。已回滚本次创建。");
+                throw CreateValidationException("任务创建后查询不到（schtasks /Query 失败或任务未注册）", runAsAdministrator);
+            }
+
+            if (!task.MatchesDefinition(_executablePath, runAsAdministrator, out var mismatch))
+            {
+                TryDeleteTask();
+                throw CreateValidationException(mismatch, runAsAdministrator, task.RawXml);
             }
 
             // 任务确认可用后再清理旧版 Run 键。
@@ -329,12 +409,29 @@ internal sealed class StartupRegistrationService
     {
         try
         {
-            RunSchtasksCaptured($"/Delete /F /TN \"{TaskName}\"");
+            RunSchtasksCaptured($"/Delete /F /TN \"{TaskName}\"", "回滚自启动任务");
         }
         catch
         {
             // 回滚失败不应掩盖原始错误；界面会显示校验失败的原因。
         }
+    }
+
+    private static InvalidOperationException CreateValidationException(
+        string reason,
+        bool runAsAdministrator,
+        string? rawXml = null)
+    {
+        var message = $"{(runAsAdministrator ? "管理员自启" : "自启动")}任务创建后校验失败：{reason}。已回滚本次创建。";
+        var exception = new InvalidOperationException(message);
+        // 对话框只显示一句话，完整的任务 XML 留给 Data\error.log，方便定位是哪个字段
+        // 被 Task Scheduler 改写了。XML 里只有可执行路径和用户名，没有隐私数据。
+        ErrorLog.Record(
+            "Startup",
+            rawXml is null
+                ? exception
+                : new InvalidOperationException($"{message}\n\n导出的任务 XML：\n{rawXml}"));
+        return exception;
     }
 
     /// <summary>
@@ -361,12 +458,15 @@ internal sealed class StartupRegistrationService
                         new XElement(ns + "LogonType", "InteractiveToken"),
                         new XElement(ns + "RunLevel", runLevel))),
                 new XElement(ns + "Settings",
+                    // 顺序按 Task Scheduler 的 taskSettingsType 序列排列：
+                    // AllowHardTerminate 必须在 StartWhenAvailable 之前。顺序错了
+                    // 部分系统会静默忽略其后的元素（实测表现为运行时限回到 PT72H）。
                     new XElement(ns + "MultipleInstancesPolicy", "IgnoreNew"),
                     new XElement(ns + "DisallowStartIfOnBatteries", "false"),
                     new XElement(ns + "StopIfGoingOnBatteries", "false"),
+                    new XElement(ns + "AllowHardTerminate", "true"),
                     new XElement(ns + "StartWhenAvailable", "true"),
                     new XElement(ns + "RunOnlyIfNetworkAvailable", "false"),
-                    new XElement(ns + "AllowHardTerminate", "true"),
                     new XElement(ns + "AllowStartOnDemand", "true"),
                     new XElement(ns + "Enabled", "true"),
                     new XElement(ns + "Hidden", "false"),
@@ -407,22 +507,67 @@ internal sealed class StartupRegistrationService
 
     private void RemoveStartupTask()
     {
-        // 任务本来就不存在时无需任何操作，直接清理旧 Run 键即可。
-        // 任务以最小权限创建，删除也不需要提权。
         if (TryQueryTask(out _))
         {
-            RunSchtasksCaptured($"/Delete /F /TN \"{TaskName}\"");
+            try
+            {
+                RunSchtasksCaptured($"/Delete /F /TN \"{TaskName}\"", "删除自启动任务");
+            }
+            catch (InvalidOperationException) when (!IsProcessElevated())
+            {
+                // 旧任务可能是 1.1.x 以最高权限创建的，普通权限删不掉它。
+                // 用一次 UAC helper 删除，避免把用户卡在“关不掉也换不了”的状态。
+                RunElevatedUnregistrationHelper();
+                if (TryQueryTask(out _))
+                {
+                    throw new InvalidOperationException(
+                        "删除自启动任务失败：任务仍存在，可能需要管理员权限。");
+                }
+            }
         }
 
         RemoveLegacyRunKey();
     }
 
+    /// <summary>通过 UAC 启动 helper 删除旧的高权限自启任务。</summary>
+    private void RunElevatedUnregistrationHelper()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = _executablePath,
+                Arguments = "--unregister-autostart",
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden,
+            };
+
+            using var process = Process.Start(psi)
+                ?? throw new InvalidOperationException("无法启动提权流程。");
+            if (!process.WaitForExit(60_000))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* 忽略 */ }
+                throw new InvalidOperationException("等待管理员授权或删除自启任务超时。");
+            }
+
+            if (process.ExitCode != 0)
+            {
+                throw new InvalidOperationException(
+                    $"删除自启动任务失败（helper 退出码 {process.ExitCode}）。");
+            }
+        }
+        catch (System.ComponentModel.Win32Exception exception) when (exception.NativeErrorCode == 1223)
+        {
+            throw new InvalidOperationException("已取消管理员授权，自启动任务没有删除。");
+        }
+    }
+
     /// <summary>
     /// 以 /Query /XML 读取任务定义。XML 标签为稳定英文，避免依赖本地化输出。
-    /// 注意：stdout 被重定向时，schtasks 实际输出的是系统代码页的单字节文本，却在
-    /// XML 声明里写 encoding="UTF-16" 且不带 BOM；若按字节流交给 XDocument.Load，
-    /// 会因“找不到 Unicode BOM、无法切换到 Unicode”而抛异常。因此这里按系统代码页
-    /// 解码为字符串，再用 XDocument.Parse（解析字符串时不再做编码切换）。
+    /// schtasks 的输出编码在不同 Windows 版本上并不一致（UTF-16 / UTF-8 / 系统代码页），
+    /// 且 XML 声明里的 encoding 与实际字节流可能不符，因此这里读原始字节后逐个
+    /// 候选编码尝试解析（见 <see cref="TryParseTaskXml"/>）。
     /// </summary>
     private static bool TryQueryTask(out TaskRegistrationInfo task)
     {
@@ -446,24 +591,31 @@ internal sealed class StartupRegistrationService
                 return false;
             }
 
-            // 先并行排空两个流再等退出：旧实现先 ReadToEnd 再 WaitForExit，
-            // 一旦子进程写满管道就会互相等待，5000 ms 的超时形同虚设。
-            var stdoutTask = process.StandardOutput.ReadToEndAsync();
+            // 不预设编码：schtasks 的 /XML 输出在不同 Windows 版本/区域设置下可能是
+            // UTF-16、UTF-8 或系统代码页，且 XML 声明未必与字节流一致。直接读原始
+            // 字节再逐个候选编码解析，避免“任务其实存在、查询却解析失败”。
+            using var stdout = new MemoryStream();
+            var copyTask = process.StandardOutput.BaseStream.CopyToAsync(stdout);
             var stderrTask = process.StandardError.ReadToEndAsync();
             if (!process.WaitForExit(5000))
             {
                 try { process.Kill(entireProcessTree: true); } catch { /* 忽略 */ }
+                try { copyTask.Wait(500); } catch { /* 忽略被杀进程的读取异常 */ }
                 return false;
             }
 
-            var xmlText = stdoutTask.GetAwaiter().GetResult();
+            copyTask.GetAwaiter().GetResult();
             _ = stderrTask.GetAwaiter().GetResult();
             if (process.ExitCode != 0)
             {
                 return false; // 任务不存在等情况，退出码非零。
             }
 
-            var document = XDocument.Parse(xmlText);
+            if (!TryParseTaskXml(stdout.ToArray(), out var document, out var xmlText))
+            {
+                return false;
+            }
+
             var ns = document.Root?.Name.Namespace ?? XNamespace.None;
 
             var exec = document.Descendants(ns + "Exec").FirstOrDefault();
@@ -488,13 +640,65 @@ internal sealed class StartupRegistrationService
                 disallowStartIfOnBatteries,
                 stopIfGoingOnBatteries,
                 startWhenAvailable,
-                executionTimeLimit);
+                executionTimeLimit,
+                xmlText);
             return true;
         }
         catch
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// 尝试用几种候选编码把 schtasks 的原始输出解成 XML。XML 声明里的 encoding
+    /// 只对字节流解析有意义；这里已经拿到字节，按字符串解析不会再切编码，所以
+    /// 只要选对解码方式即可。
+    /// </summary>
+    private static bool TryParseTaskXml(byte[] bytes, out XDocument document, out string xmlText)
+    {
+        document = null!;
+        xmlText = string.Empty;
+        if (bytes.Length == 0)
+        {
+            return false;
+        }
+
+        var encodings = new[]
+        {
+            Encoding.Unicode,
+            Encoding.BigEndianUnicode,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            TryGetConsoleEncoding(),
+        };
+
+        foreach (var encoding in encodings)
+        {
+            try
+            {
+                var decoded = encoding.GetString(bytes);
+                var start = decoded.IndexOf('<');
+                if (start < 0)
+                {
+                    continue;
+                }
+
+                var candidate = decoded[start..].TrimEnd('\0', '\r', '\n', ' ', '\t');
+                var parsed = XDocument.Parse(candidate);
+                if (parsed.Root is not null)
+                {
+                    document = parsed;
+                    xmlText = candidate;
+                    return true;
+                }
+            }
+            catch
+            {
+                // 换下一个编码继续试。
+            }
+        }
+
+        return false;
     }
 
     private static bool IsElementTrue(XDocument document, XNamespace ns, string localName)
@@ -504,7 +708,7 @@ internal sealed class StartupRegistrationService
     }
 
     /// <summary>在当前权限下运行 schtasks，并捕获其错误输出；非零退出码时抛异常。</summary>
-    private static void RunSchtasksCaptured(string arguments)
+    private static void RunSchtasksCaptured(string arguments, string operation)
     {
         var psi = new ProcessStartInfo
         {
@@ -537,7 +741,7 @@ internal sealed class StartupRegistrationService
         {
             var detail = FirstNonBlank(stderr, stdout);
             throw new InvalidOperationException(
-                $"schtasks 执行失败（退出码 {process.ExitCode}）：{detail}");
+                $"{operation}失败：schtasks 执行失败（退出码 {process.ExitCode}）：{detail}");
         }
     }
 
@@ -645,7 +849,8 @@ internal sealed class StartupRegistrationService
         bool DisallowStartIfOnBatteries,
         bool StopIfGoingOnBatteries,
         bool StartWhenAvailable,
-        string ExecutionTimeLimit)
+        string ExecutionTimeLimit,
+        string RawXml)
     {
         /// <summary>是否以最高权限运行。</summary>
         public bool RunAsAdministrator =>
@@ -686,36 +891,86 @@ internal sealed class StartupRegistrationService
 
         /// <summary>
         /// 任务是否完全符合给定模式的定义：RunLevel 与请求一致 + 关电池限制 +
-        /// 无运行时限 + 错过补跑。
+        /// 无运行时限 + 错过补跑。失败时通过 <paramref name="mismatch"/> 返回
+        /// 具体是哪一项不匹配，便于界面和日志定位。
         /// </summary>
-        public bool MatchesDefinition(string executablePath, bool runAsAdministrator)
+        public bool MatchesDefinition(string executablePath, bool runAsAdministrator, out string mismatch)
         {
-            if (!StartsCurrentExecutable(executablePath))
+            mismatch = string.Empty;
+
+            if (!HasLogonTrigger)
             {
+                mismatch = "任务没有登录触发器";
                 return false;
             }
 
-            if (!RunLevel.Equals(
-                    runAsAdministrator ? "HighestAvailable" : "LeastPrivilege",
-                    StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(Command))
             {
+                mismatch = "任务没有可执行命令";
+                return false;
+            }
+
+            string normalizedCommand;
+            try
+            {
+                normalizedCommand = Path.GetFullPath(Command);
+            }
+            catch
+            {
+                mismatch = $"任务命令路径无效：{Command}";
+                return false;
+            }
+
+            if (!string.Equals(normalizedCommand, executablePath, StringComparison.OrdinalIgnoreCase))
+            {
+                mismatch = $"执行路径是 {normalizedCommand}，当前程序是 {executablePath}";
+                return false;
+            }
+
+            if (!(Command + " " + Arguments).Contains(BackgroundArgument, StringComparison.OrdinalIgnoreCase))
+            {
+                mismatch = "任务参数缺少 --background";
+                return false;
+            }
+
+            var expectedRunLevel = runAsAdministrator ? "HighestAvailable" : "LeastPrivilege";
+            // RunLevel 在任务 XML 里是可选项，缺省语义就是 LeastPrivilege；
+            // 某些系统的 /Query /XML 导出会省略它，这里按默认值处理。
+            var actualRunLevel = string.IsNullOrWhiteSpace(RunLevel) ? "LeastPrivilege" : RunLevel;
+            if (!actualRunLevel.Equals(expectedRunLevel, StringComparison.OrdinalIgnoreCase))
+            {
+                mismatch = $"运行级别是 {actualRunLevel}，期望 {expectedRunLevel}";
                 return false;
             }
 
             // 电池策略：必须允许电池供电时启动、且不因切到电池而停止（笔记本关键）。
-            if (DisallowStartIfOnBatteries || StopIfGoingOnBatteries)
+            if (DisallowStartIfOnBatteries)
             {
+                mismatch = "电池供电时会跳过启动（DisallowStartIfOnBatteries=true）";
+                return false;
+            }
+
+            if (StopIfGoingOnBatteries)
+            {
+                mismatch = "切到电池会停止（StopIfGoingOnBatteries=true）";
                 return false;
             }
 
             // 错过触发后必须补跑（登录瞬间任务计划服务可能尚未就绪）。
             if (!StartWhenAvailable)
             {
+                mismatch = "错过触发后不补跑（StartWhenAvailable=false）";
                 return false;
             }
 
             // 运行时限必须无限制（PT0S），否则任务拉起的实例会在 72 小时后被系统终止。
-            return ExecutionTimeLimit.Equals("PT0S", StringComparison.OrdinalIgnoreCase);
+            if (!ExecutionTimeLimit.Equals("PT0S", StringComparison.OrdinalIgnoreCase))
+            {
+                mismatch = $"运行时限是 {ExecutionTimeLimit}，期望 PT0S";
+                return false;
+            }
+
+            return true;
         }
     }
 }
