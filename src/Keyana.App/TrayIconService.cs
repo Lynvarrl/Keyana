@@ -7,7 +7,6 @@ internal sealed class TrayIconService : IDisposable
     private readonly System.Windows.Forms.NotifyIcon _notifyIcon;
     private readonly System.Windows.Forms.ToolStripMenuItem _pauseItem;
     private readonly Icon? _applicationIcon;
-    private bool _hiddenNotificationShown;
     private bool _isPaused;
     private string? _errorText;
 
@@ -70,20 +69,6 @@ internal sealed class TrayIconService : IDisposable
         _notifyIcon.Text = _errorText is { Length: > 0 } error
             ? $"Keyana · {error}"
             : _isPaused ? "Keyana · 已暂停" : "Keyana · 正在采集";
-    }
-
-    public void ShowHiddenNotification()
-    {
-        if (_hiddenNotificationShown)
-        {
-            return;
-        }
-
-        _hiddenNotificationShown = true;
-        _notifyIcon.BalloonTipTitle = "Keyana 仍在后台采集";
-        _notifyIcon.BalloonTipText = "双击托盘图标可重新打开；选择“完整退出”才会停止采集。";
-        _notifyIcon.BalloonTipIcon = System.Windows.Forms.ToolTipIcon.Info;
-        _notifyIcon.ShowBalloonTip(3500);
     }
 
     public void Dispose()

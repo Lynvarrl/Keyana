@@ -730,7 +730,6 @@ public partial class MainWindow : Window
 
         eventArgs.Cancel = true;
         Hide();
-        _trayIcon?.ShowHiddenNotification();
     }
 
     private void MainWindow_Closed(object? sender, EventArgs eventArgs)
