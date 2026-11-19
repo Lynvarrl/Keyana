@@ -285,7 +285,9 @@ public partial class MainWindow
             TimeZoneInfo.Local,
             _lifetimeCancellation.Token);
 
-        var label = ActivityRangeLabel();
+        // 区间名统一走 TimeRangeLabels：范围写「日」，数量写「天」。
+        // 「全部」把实际覆盖的自然日数一起写出来，否则两块卡片的副标题只有「全部」。
+        var label = TimeRangeLabels.ForPreset(_activityPreset, daily.DayCount);
         ActiveDaysText.Text = daily.ActiveDays.ToString("N0");
         FireDaysText.Text = daily.FireDays.ToString("N0");
         ActiveDaysHintText.Text = $"{label} · ≥325 次/天";
@@ -373,17 +375,6 @@ public partial class MainWindow
         ActivityRangePicker.SetRangeUtc(range.StartUtc, range.EndUtc);
         await RefreshActivityMetricsAsync();
     }
-
-    private string ActivityRangeLabel() => _activityPreset switch
-    {
-        TimeRangePreset.Today => "今日",
-        TimeRangePreset.Yesterday => "昨日",
-        TimeRangePreset.Recent7Days => "近 7 天",
-        TimeRangePreset.Recent30Days => "近 30 天",
-        TimeRangePreset.Recent90Days => "近 90 天",
-        TimeRangePreset.All => "全部",
-        _ => "自定义区间",
-    };
 
     private (DateOnly? Start, DateOnly? End) SelectedRangeLocalDates()
     {

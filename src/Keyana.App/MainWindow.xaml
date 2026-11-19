@@ -122,15 +122,15 @@
                             <WrapPanel VerticalAlignment="Center">
                                 <TextBlock Text="统计范围" Style="{StaticResource CaptionText}"
                                            VerticalAlignment="Center" Margin="0,0,12,4" />
-                                <RadioButton x:Name="PresetChipToday" Content="今天" Tag="Today" GroupName="RangePreset"
+                                <RadioButton x:Name="PresetChipToday" Content="今日" Tag="Today" GroupName="RangePreset"
                                              Style="{StaticResource ChipStyle}" IsChecked="True" Checked="PresetChip_Checked" />
-                                <RadioButton x:Name="PresetChipYesterday" Content="昨天" Tag="Yesterday" GroupName="RangePreset"
+                                <RadioButton x:Name="PresetChipYesterday" Content="昨日" Tag="Yesterday" GroupName="RangePreset"
                                              Style="{StaticResource ChipStyle}" Checked="PresetChip_Checked" />
                                 <RadioButton x:Name="PresetChipRecent10" Content="最近 10 分钟" Tag="Recent10" GroupName="RangePreset"
                                              Style="{StaticResource ChipStyle}" Checked="PresetChip_Checked" />
-                                <RadioButton x:Name="PresetChipRecent7Days" Content="最近 7 天" Tag="Recent7Days" GroupName="RangePreset"
+                                <RadioButton x:Name="PresetChipRecent7Days" Content="近 7 日" Tag="Recent7Days" GroupName="RangePreset"
                                              Style="{StaticResource ChipStyle}" Checked="PresetChip_Checked" />
-                                <RadioButton x:Name="PresetChipRecent30Days" Content="最近 30 天" Tag="Recent30Days" GroupName="RangePreset"
+                                <RadioButton x:Name="PresetChipRecent30Days" Content="近 30 日" Tag="Recent30Days" GroupName="RangePreset"
                                              Style="{StaticResource ChipStyle}" Checked="PresetChip_Checked" />
                                 <RadioButton x:Name="PresetChipAll" Content="全部" Tag="All" GroupName="RangePreset"
                                              Style="{StaticResource ChipStyle}" Checked="PresetChip_Checked" />
@@ -428,7 +428,7 @@
                                                      Padding="10,4" Margin="0,0,6,0"
                                                      Checked="ActivityPresetChip_Checked" />
                                     </StackPanel>
-                                    <TextBlock x:Name="ActivitySummaryText" Grid.Column="1" Text="最近 30 天"
+                                    <TextBlock x:Name="ActivitySummaryText" Grid.Column="1" Text="近 30 日"
                                                Style="{StaticResource CaptionText}"
                                                VerticalAlignment="Center" Margin="12,0,0,0"
                                                TextTrimming="CharacterEllipsis" />

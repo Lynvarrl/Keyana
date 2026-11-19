@@ -54,6 +54,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("自定义范围按十分钟向外对齐", Sync(CustomRangeSnapsToTenMinutes)),
     ("自定义区间不能走预设换算", Sync(CustomPresetRequiresExplicitRange)),
     ("午夜发生夏令时跳变时仍能算出当天起点", Sync(MidnightDstTransitionUsesFirstValidInstant)),
+    ("区间名称统一用「日」", Sync(RangeLabelsUseDayCharacter)),
+    ("「全部」区间名称带出实际天数", Sync(AllRangeLabelCarriesDayCount)),
     ("滚轮增量按 120 单位累计成刻度", Sync(WheelAccumulatesToNotches)),
     ("滚轮脉冲可连续计数且不进入按下状态", Sync(WheelImpulseCountsRepeatedly)),
     ("逐日汇总识别活跃日、火热日与逐小时分布", DailyUsageMarksActiveAndFireDaysAsync),
@@ -1079,6 +1081,36 @@ static void MidnightDstTransitionUsesFirstValidInstant()
     Equal(
         new DateTimeOffset(2026, 3, 7, 16, 0, 0, TimeSpan.Zero).ToUnixTimeSeconds(),
         today.StartUtc);
+}
+
+static void RangeLabelsUseDayCharacter()
+{
+    // 范围写「日」，与「活跃天数」「共 87 天」这类数量说法分开。
+    Equal("今日", TimeRangeLabels.ForPreset(TimeRangePreset.Today));
+    Equal("昨日", TimeRangeLabels.ForPreset(TimeRangePreset.Yesterday));
+    Equal("最近 10 分钟", TimeRangeLabels.ForPreset(TimeRangePreset.Recent10));
+    Equal("近 7 日", TimeRangeLabels.ForPreset(TimeRangePreset.Recent7Days));
+    Equal("近 30 日", TimeRangeLabels.ForPreset(TimeRangePreset.Recent30Days));
+    Equal("近 90 日", TimeRangeLabels.ForPreset(TimeRangePreset.Recent90Days));
+    Equal("自定义区间", TimeRangeLabels.ForPreset(TimeRangePreset.Custom));
+
+    // 任何一个区间名里都不能再出现「天」，否则两套说法又会并存。
+    foreach (var preset in Enum.GetValues<TimeRangePreset>())
+    {
+        var label = TimeRangeLabels.ForPreset(preset, 87);
+        if (label.Contains('天', StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"区间名里出现了「天」：{label}");
+        }
+    }
+}
+
+static void AllRangeLabelCarriesDayCount()
+{
+    // 「全部」没有固定跨度，把实际覆盖的自然日数写进名字里。
+    Equal("全部87日", TimeRangeLabels.ForPreset(TimeRangePreset.All, 87));
+    // 天数未知时退回只写「全部」，不能出现「全部 0 日」。
+    Equal("全部", TimeRangeLabels.ForPreset(TimeRangePreset.All, 0));
 }
 
 static void YesterdayRangeCoversWholeLocalDay()
