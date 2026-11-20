@@ -1,15 +1,25 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using Keyana.App.Theme;
 
 namespace Keyana.App.Controls;
 
+/// <summary>
+/// 一天 144 段（每段 10 分钟）的时段分布条。
+///
+/// 这里不再用 144 个 Border 拼：UniformGrid 把宽度分成 144 份后，每段的左右边界都落在
+/// 小数像素上，相邻两段之间会露出背景，表现为「彩块中间一条细深色线」；再加上原先每 6 段
+/// 还带一条 1px 的透明左边框（等于在条带上打了个洞），暗色主题下就变成规则的暗线。
+/// 现在改成整条自绘：每段的左右边界都取整到物理像素，相邻两段共享同一条边界，既无缝也不糊。
+/// </summary>
 public sealed class TenMinuteTimelineControl : Grid
 {
     public const int SegmentCount = 144;
-    private readonly Border[] _segmentVisuals = new Border[SegmentCount];
+
+    private readonly TimelineStrip _strip = new();
     private IReadOnlyList<ulong> _lastCounts = new ulong[SegmentCount];
     private HeatPalette _lastPalette = HeatPalette.BlueMagenta;
     private bool _themeHooked;
@@ -20,26 +30,8 @@ public sealed class TenMinuteTimelineControl : Grid
         RowDefinitions.Add(new RowDefinition { Height = new GridLength(20) });
         RowDefinitions.Add(new RowDefinition { Height = new GridLength(17) });
 
-        var segments = new UniformGrid { Columns = SegmentCount };
-        for (var index = 0; index < SegmentCount; index++)
-        {
-            var startMinutes = index * 10;
-            var endMinutes = (index + 1) * 10;
-            var segment = new Border
-            {
-                Background = new SolidColorBrush(ControlTheme.EmptyCell),
-                BorderBrush = Brushes.Transparent,
-                BorderThickness = new Thickness(index % 6 == 0 ? 1 : 0, 0, 0, 0),
-                ToolTip = $"{FormatTime(startMinutes)}—{FormatTime(endMinutes)}\n输入次数：0",
-            };
-            ToolTipService.SetInitialShowDelay(segment, 500);
-            ToolTipService.SetBetweenShowDelay(segment, 100);
-            ToolTipService.SetShowDuration(segment, 30_000);
-            _segmentVisuals[index] = segment;
-            segments.Children.Add(segment);
-        }
-
-        Children.Add(segments);
+        _strip.Counts = _lastCounts;
+        Children.Add(_strip);
 
         var labels = new UniformGrid { Columns = 12 };
         SetRow(labels, 1);
@@ -58,6 +50,7 @@ public sealed class TenMinuteTimelineControl : Grid
 
         Children.Add(labels);
 
+        Unloaded += (_, _) => _strip.CloseToolTip();
         Loaded += (_, _) => HookTheme();
         Unloaded += (_, _) => UnhookTheme();
         HookTheme();
@@ -72,25 +65,9 @@ public sealed class TenMinuteTimelineControl : Grid
 
         _lastCounts = counts;
         _lastPalette = palette;
-        Render(palette);
-    }
-
-    private void Render(HeatPalette palette)
-    {
-        var counts = _lastCounts;
-        var maximum = counts.DefaultIfEmpty().Max();
-        var borderBrush = new SolidColorBrush(ControlTheme.CellBorder);
-
-        for (var index = 0; index < SegmentCount; index++)
-        {
-            var count = counts[index];
-            // 时段图固定使用平方根强度映射，颜色则与键盘热力图共用同一套配色，随选项联动。
-            var intensity = maximum == 0 ? 0d : Math.Sqrt(count / (double)maximum);
-            _segmentVisuals[index].Background = new SolidColorBrush(HeatPaletteColors.GetColor(palette, count, intensity));
-            _segmentVisuals[index].BorderBrush = borderBrush;
-            _segmentVisuals[index].ToolTip =
-                $"{FormatTime(index * 10)}—{FormatTime((index + 1) * 10)}\n输入次数：{count:N0}";
-        }
+        _strip.Counts = counts;
+        _strip.Palette = palette;
+        _strip.InvalidateVisual();
     }
 
     private void HookTheme()
@@ -115,9 +92,9 @@ public sealed class TenMinuteTimelineControl : Grid
         _themeHooked = false;
     }
 
-    private void OnThemeChanged() => Render(_lastPalette);
+    private void OnThemeChanged() => _strip.InvalidateVisual();
 
-    private static string FormatTime(int totalMinutes)
+    internal static string FormatTime(int totalMinutes)
     {
         if (totalMinutes == 24 * 60)
         {
@@ -125,5 +102,112 @@ public sealed class TenMinuteTimelineControl : Grid
         }
 
         return $"{totalMinutes / 60:00}:{totalMinutes % 60:00}";
+    }
+
+    /// <summary>整条带子的绘制与悬停：一次 OnRender 画完 144 段，不再有一百多个可视元素。</summary>
+    private sealed class TimelineStrip : FrameworkElement
+    {
+        private readonly ToolTip _toolTip = new()
+        {
+            Placement = PlacementMode.Mouse,
+            StaysOpen = true,
+        };
+
+        private int _hoverIndex = -1;
+
+        public TimelineStrip()
+        {
+            SnapsToDevicePixels = true;
+            ClipToBounds = true;
+        }
+
+        public IReadOnlyList<ulong> Counts { get; set; } = new ulong[SegmentCount];
+
+        public HeatPalette Palette { get; set; } = HeatPalette.BlueMagenta;
+
+        protected override void OnRender(DrawingContext drawingContext)
+        {
+            var width = ActualWidth;
+            var height = ActualHeight;
+            if (width <= 0 || height <= 0 || Counts.Count == 0)
+            {
+                return;
+            }
+
+            var maximum = 0UL;
+            foreach (var count in Counts)
+            {
+                if (count > maximum)
+                {
+                    maximum = count;
+                }
+            }
+
+            var brushes = new Dictionary<Color, SolidColorBrush>();
+            for (var index = 0; index < Counts.Count; index++)
+            {
+                // 关键两点：
+                // 1) 左右边界都取整到物理像素，相邻两段共用同一条边界，不会露出背景；
+                // 2) 段宽至少 1px，窗口很窄时宁可少显示几段也不画成虚线。
+                var left = Math.Round(index * width / Counts.Count);
+                var right = Math.Round((index + 1) * width / Counts.Count);
+                if (right <= left)
+                {
+                    right = left + 1;
+                }
+
+                var count = Counts[index];
+                // 时段图固定使用平方根强度映射，颜色与键盘热力图共用同一套配色。
+                var intensity = maximum == 0 ? 0d : Math.Sqrt(count / (double)maximum);
+                var color = HeatPaletteColors.GetColor(Palette, count, intensity);
+                if (!brushes.TryGetValue(color, out var brush))
+                {
+                    brush = new SolidColorBrush(color);
+                    brush.Freeze();
+                    brushes[color] = brush;
+                }
+
+                drawingContext.DrawRectangle(brush, null, new Rect(left, 0, right - left, height));
+            }
+        }
+
+        protected override void OnMouseMove(MouseEventArgs eventArgs)
+        {
+            base.OnMouseMove(eventArgs);
+
+            if (ActualWidth <= 0 || Counts.Count == 0)
+            {
+                return;
+            }
+
+            var position = eventArgs.GetPosition(this);
+            var index = (int)(position.X * Counts.Count / ActualWidth);
+            index = Math.Clamp(index, 0, Counts.Count - 1);
+            if (index == _hoverIndex)
+            {
+                return;
+            }
+
+            _hoverIndex = index;
+            _toolTip.Content =
+                $"{FormatTime(index * 10)}—{FormatTime((index + 1) * 10)}\n输入次数：{Counts[index]:N0}";
+            _toolTip.PlacementTarget = this;
+            if (!_toolTip.IsOpen)
+            {
+                _toolTip.IsOpen = true;
+            }
+        }
+
+        protected override void OnMouseLeave(MouseEventArgs eventArgs)
+        {
+            base.OnMouseLeave(eventArgs);
+            CloseToolTip();
+        }
+
+        public void CloseToolTip()
+        {
+            _hoverIndex = -1;
+            _toolTip.IsOpen = false;
+        }
     }
 }
