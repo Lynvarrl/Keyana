@@ -23,6 +23,10 @@ public sealed class KeyboardHeatmapControl : Viewbox
     private const double Unit = 48;
     private const double Gap = 4;
     private const double Step = Unit + Gap;
+
+    /// <summary>鼠标一行与键盘之间留小半格，肉眼能看出是两组，又不会让画布变高太多。</summary>
+    private const double MouseRowGap = 0.45;
+
     private readonly Dictionary<KeyId, KeyCapVisual> _keyCaps = [];
     private IReadOnlyList<ulong> _lastCounts = new ulong[KeyCatalog.Count];
     private IReadOnlySet<KeyId> _lastPressed = new HashSet<KeyId>();
@@ -30,6 +34,7 @@ public sealed class KeyboardHeatmapControl : Viewbox
     private HeatPalette _lastPalette = HeatPalette.BlueMagenta;
     private ColorBasis _lastKeyboardBasis = ColorBasis.KeyboardOnly;
     private ColorBasis _lastMouseBasis = ColorBasis.KeyboardAndMouse;
+    private KeyLayout _layout = KeyLayouts.Default;
     private bool _themeHooked;
 
     public KeyboardHeatmapControl()
@@ -39,21 +44,30 @@ public sealed class KeyboardHeatmapControl : Viewbox
         HorizontalAlignment = HorizontalAlignment.Stretch;
         VerticalAlignment = VerticalAlignment.Stretch;
 
-        // 比键盘多一行：鼠标按键与滚轮按同样的键帽样式排在键盘下方，
-        // 这样「鼠标没有热力图」不再是信息缺口，也不需要另开一张卡片。
-        var canvas = new Canvas
-        {
-            Width = 24 * Step,
-            Height = (7 * Step) + 6,
-            Background = Brushes.Transparent,
-        };
-        Child = canvas;
-        BuildKeyboard(canvas);
-        BuildMouseRow(canvas);
+        Rebuild();
 
         Loaded += (_, _) => HookTheme();
         Unloaded += (_, _) => UnhookTheme();
         HookTheme();
+    }
+
+    /// <summary>当前配列。换配列只影响画法，不影响任何计数。</summary>
+    public KeyLayout Layout => _layout;
+
+    /// <summary>换一套配列重画。键帽集合整体重建，计数与按下状态沿用上一次的数据。</summary>
+    public void SetLayout(KeyLayout layout)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        if (string.Equals(layout.Id, _layout.Id, StringComparison.Ordinal) &&
+            layout.Caps.Count == _layout.Caps.Count)
+        {
+            _layout = layout;
+            return;
+        }
+
+        _layout = layout;
+        Rebuild();
+        Render();
     }
 
     public void SetData(
@@ -129,7 +143,8 @@ public sealed class KeyboardHeatmapControl : Viewbox
             var basisText = denominator == 0
                 ? "着色基准：暂无数据"
                 : $"着色基准：{denominator:N0} 次（本键占 {count * 100d / denominator:F1}%）";
-            visual.Border.ToolTip = $"{KeyCatalog.Get(keyId).DisplayName}\n次数：{count:N0}\n占全部输入：{percentage:F2}%\n排名：{rankText}\n{basisText}";
+            visual.Border.ToolTip =
+                $"{KeyCatalog.Get(keyId).DisplayName}\n次数：{count:N0}\n占全部输入：{percentage:F2}%\n排名：{rankText}\n{basisText}";
         }
     }
 
@@ -157,62 +172,29 @@ public sealed class KeyboardHeatmapControl : Viewbox
 
     private void OnThemeChanged() => Render();
 
-    private void BuildKeyboard(Canvas canvas)
+    /// <summary>
+    /// 按当前配列重建画布。1U = <see cref="Unit"/> 像素，整体由 Viewbox 等比缩放到卡片宽度，
+    /// 所以配列只需要给出相对坐标。
+    /// </summary>
+    private void Rebuild()
     {
-        Add(canvas, KeyId.Escape, "Esc", 0, 0);
-        AddSequence(canvas, 2, 0,
-            K(KeyId.F1, "F1"), K(KeyId.F2, "F2"), K(KeyId.F3, "F3"), K(KeyId.F4, "F4"));
-        AddSequence(canvas, 6.5, 0,
-            K(KeyId.F5, "F5"), K(KeyId.F6, "F6"), K(KeyId.F7, "F7"), K(KeyId.F8, "F8"));
-        AddSequence(canvas, 11, 0,
-            K(KeyId.F9, "F9"), K(KeyId.F10, "F10"), K(KeyId.F11, "F11"), K(KeyId.F12, "F12"));
-        AddSequence(canvas, 15.5, 0,
-            K(KeyId.PrintScreen, "PrtSc"), K(KeyId.ScrollLock, "ScrLk"), K(KeyId.Pause, "Pause"));
+        _keyCaps.Clear();
 
-        AddSequence(canvas, 0, 1,
-            K(KeyId.Grave, "`"), K(KeyId.Digit1, "1"), K(KeyId.Digit2, "2"), K(KeyId.Digit3, "3"),
-            K(KeyId.Digit4, "4"), K(KeyId.Digit5, "5"), K(KeyId.Digit6, "6"), K(KeyId.Digit7, "7"),
-            K(KeyId.Digit8, "8"), K(KeyId.Digit9, "9"), K(KeyId.Digit0, "0"), K(KeyId.Minus, "-"),
-            K(KeyId.Equal, "="), K(KeyId.Backspace, "Backspace", 2));
-        AddSequence(canvas, 16, 1,
-            K(KeyId.Insert, "Ins"), K(KeyId.Home, "Home"), K(KeyId.PageUp, "PgUp"));
-        AddSequence(canvas, 20, 1,
-            K(KeyId.NumLock, "Num"), K(KeyId.NumpadDivide, "/"), K(KeyId.NumpadMultiply, "*"), K(KeyId.NumpadSubtract, "-"));
+        var mouseY = _layout.Rows + MouseRowGap;
+        var canvas = new Canvas
+        {
+            Width = _layout.Columns * Step,
+            Height = ((mouseY + 1) * Step) + 6,
+            Background = Brushes.Transparent,
+        };
 
-        AddSequence(canvas, 0, 2,
-            K(KeyId.Tab, "Tab", 1.5), K(KeyId.Q, "Q"), K(KeyId.W, "W"), K(KeyId.E, "E"), K(KeyId.R, "R"),
-            K(KeyId.T, "T"), K(KeyId.Y, "Y"), K(KeyId.U, "U"), K(KeyId.I, "I"), K(KeyId.O, "O"), K(KeyId.P, "P"),
-            K(KeyId.LeftBracket, "["), K(KeyId.RightBracket, "]"), K(KeyId.Backslash, "\\", 1.5));
-        AddSequence(canvas, 16, 2,
-            K(KeyId.Delete, "Del"), K(KeyId.End, "End"), K(KeyId.PageDown, "PgDn"));
-        AddSequence(canvas, 20, 2,
-            K(KeyId.Numpad7, "7"), K(KeyId.Numpad8, "8"), K(KeyId.Numpad9, "9"));
-        Add(canvas, KeyId.NumpadAdd, "+", 23, 2, 1, 2);
+        foreach (var cap in _layout.Caps)
+        {
+            Add(canvas, cap.Id, cap.DisplayLabel, cap.X, cap.Y, cap.Width, cap.Height);
+        }
 
-        AddSequence(canvas, 0, 3,
-            K(KeyId.CapsLock, "Caps", 1.75), K(KeyId.A, "A"), K(KeyId.S, "S"), K(KeyId.D, "D"), K(KeyId.F, "F"),
-            K(KeyId.G, "G"), K(KeyId.H, "H"), K(KeyId.J, "J"), K(KeyId.K, "K"), K(KeyId.L, "L"),
-            K(KeyId.Semicolon, ";"), K(KeyId.Apostrophe, "'"), K(KeyId.Enter, "Enter", 2.25));
-        AddSequence(canvas, 20, 3,
-            K(KeyId.Numpad4, "4"), K(KeyId.Numpad5, "5"), K(KeyId.Numpad6, "6"));
-
-        AddSequence(canvas, 0, 4,
-            K(KeyId.LeftShift, "Shift", 2.25), K(KeyId.Z, "Z"), K(KeyId.X, "X"), K(KeyId.C, "C"), K(KeyId.V, "V"),
-            K(KeyId.B, "B"), K(KeyId.N, "N"), K(KeyId.M, "M"), K(KeyId.Comma, ","), K(KeyId.Period, "."),
-            K(KeyId.Slash, "/"), K(KeyId.RightShift, "Shift", 2.75));
-        Add(canvas, KeyId.ArrowUp, "↑", 17, 4);
-        AddSequence(canvas, 20, 4,
-            K(KeyId.Numpad1, "1"), K(KeyId.Numpad2, "2"), K(KeyId.Numpad3, "3"));
-        Add(canvas, KeyId.NumpadEnter, "Enter", 23, 4, 1, 2);
-
-        AddSequence(canvas, 0, 5,
-            K(KeyId.LeftControl, "Ctrl", 1.25), K(KeyId.LeftWindows, "Win", 1.25), K(KeyId.LeftAlt, "Alt", 1.25),
-            K(KeyId.Space, "Space", 6.25), K(KeyId.RightAlt, "Alt", 1.25), K(KeyId.RightWindows, "Win", 1.25),
-            K(KeyId.Application, "Menu", 1.25), K(KeyId.RightControl, "Ctrl", 1.25));
-        AddSequence(canvas, 16, 5,
-            K(KeyId.ArrowLeft, "←"), K(KeyId.ArrowDown, "↓"), K(KeyId.ArrowRight, "→"));
-        Add(canvas, KeyId.Numpad0, "0", 20, 5, 2);
-        Add(canvas, KeyId.NumpadDecimal, ".", 22, 5);
+        AddMouseRow(canvas, mouseY);
+        Child = canvas;
     }
 
     /// <summary>
@@ -221,7 +203,7 @@ public sealed class KeyboardHeatmapControl : Viewbox
     /// 不画鼠标轮廓：数据只有 7 个按钮，形状本身不承载信息，反而会把卡片撑高；
     /// 用同样的键帽排一行，颜色、悬停提示、按下高亮都自动与键盘保持一致。
     /// </summary>
-    private void BuildMouseRow(Canvas canvas)
+    private void AddMouseRow(Canvas canvas, double y)
     {
         var label = new TextBlock
         {
@@ -232,27 +214,20 @@ public sealed class KeyboardHeatmapControl : Viewbox
         };
         Canvas.SetLeft(label, 0);
         // 与键帽文字行垂直居中对齐，不靠猜像素：单元高减去一行小字的高度后对半分。
-        Canvas.SetTop(label, (6 * Step) + ((Unit - 15) / 2));
+        Canvas.SetTop(label, (y * Step) + ((Unit - 15) / 2));
         canvas.Children.Add(label);
 
         const double mouseWidth = 1.5;
-        AddSequence(canvas, 2, 6,
-            K(KeyId.MouseLeftButton, "左键", mouseWidth),
-            K(KeyId.MouseMiddleButton, "中键", mouseWidth),
-            K(KeyId.MouseRightButton, "右键", mouseWidth),
-            K(KeyId.MouseXButton1, "侧键1", mouseWidth),
-            K(KeyId.MouseXButton2, "侧键2", mouseWidth),
-            K(KeyId.MouseWheelUp, "滚轮↑", mouseWidth),
-            K(KeyId.MouseWheelDown, "滚轮↓", mouseWidth));
-    }
-
-    private void AddSequence(Canvas canvas, double startX, double y, params KeySpec[] keys)
-    {
-        var x = startX;
-        foreach (var key in keys)
+        var x = 2d;
+        foreach (var id in new[]
+                 {
+                     KeyId.MouseLeftButton, KeyId.MouseMiddleButton, KeyId.MouseRightButton,
+                     KeyId.MouseXButton1, KeyId.MouseXButton2,
+                     KeyId.MouseWheelUp, KeyId.MouseWheelDown,
+                 })
         {
-            Add(canvas, key.Id, key.Label, x, y, key.Width);
-            x += key.Width;
+            Add(canvas, id, KeyShortLabel.For(id), x, y, mouseWidth);
+            x += mouseWidth;
         }
     }
 
@@ -299,9 +274,5 @@ public sealed class KeyboardHeatmapControl : Viewbox
         _keyCaps[keyId] = new KeyCapVisual(border, nameText, countText);
     }
 
-    private static KeySpec K(KeyId id, string label, double width = 1) => new(id, label, width);
-
     private sealed record KeyCapVisual(Border Border, TextBlock NameText, TextBlock CountText);
-
-    private readonly record struct KeySpec(KeyId Id, string Label, double Width);
 }

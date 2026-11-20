@@ -117,6 +117,7 @@ public partial class MainWindow : Window
         // 这段时间里用户第一眼看到的就是它们。
         SelectColorBasis(KeyboardBasisComboBox, _keyboardBasis);
         SelectColorBasis(MouseBasisComboBox, _mouseBasis);
+        InitializeLayouts();
         ApplyElevationState();
         UpdateDurationTexts();
         InitializeActivityDefaults();

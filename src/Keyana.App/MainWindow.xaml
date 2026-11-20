@@ -244,6 +244,10 @@
                                     <TextBlock Text="键盘与鼠标热力图" Style="{StaticResource CardTitleText}" />
                                     <TextBlock x:Name="HeatmapRangeText" Text="正在加载范围…"
                                                Style="{StaticResource CaptionText}" Margin="0,3,0,0" />
+                                    <!-- 配列说明：换了紧凑配列后，没画出来的键会在这里明确写出来，
+                                         免得用户以为数据丢了。 -->
+                                    <TextBlock x:Name="LayoutHintText" Style="{StaticResource CaptionText}"
+                                               Margin="0,2,0,0" TextWrapping="Wrap" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
                                     <StackPanel Margin="0,0,16,0">
@@ -725,6 +729,27 @@
                                               HorizontalAlignment="Left" Margin="0,8,0,0"
                                               SelectionChanged="ColorBasisComboBox_SelectionChanged" />
                                 </Grid>
+
+                                <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,18" />
+
+                                <!-- 配列只改画法：采集、入库与排行榜都按物理键走，
+                                     换一套配列不会改变任何一个数字。 -->
+                                <TextBlock Text="键盘配列" Style="{StaticResource SectionTitleText}" />
+                                <TextBlock Text="只影响热力图的画法，不改变任何统计口径；没画出来的键仍会出现在排行榜里。"
+                                           Style="{StaticResource CaptionText}" Margin="0,3,0,8" TextWrapping="Wrap" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox x:Name="LayoutComboBox" HorizontalAlignment="Left" Width="240"
+                                              SelectionChanged="LayoutComboBox_SelectionChanged" />
+                                    <Button x:Name="ImportLayoutButton" Grid.Column="1" Content="导入布局…"
+                                            Style="{StaticResource SecondaryButtonStyle}" Padding="12,6"
+                                            Margin="8,0,0,0" Focusable="False" Click="ImportLayoutButton_Click" />
+                                </Grid>
+                                <TextBlock x:Name="LayoutPathText" Style="{StaticResource MonoText}"
+                                           Margin="0,8,0,0" TextWrapping="Wrap" />
                             </StackPanel>
                         </Border>
 

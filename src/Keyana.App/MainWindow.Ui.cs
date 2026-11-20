@@ -130,6 +130,11 @@ public partial class MainWindow
             SelectColorBasis(KeyboardBasisComboBox, _keyboardBasis);
             SelectColorBasis(MouseBasisComboBox, _mouseBasis);
 
+            // 配列可能来自 Data\layouts：找不到就回落内置 104，绝不让设置里一个旧 id 挡住启动。
+            ApplyLayout(
+                _layoutLibrary?.Find(settings.KeyboardLayoutId) ?? KeyLayouts.Default,
+                persist: false);
+
             PaletteChipBlue.IsChecked = _currentPalette == HeatPalette.BlueMagenta;
             PaletteChipGreen.IsChecked = _currentPalette == HeatPalette.GreenAmber;
 

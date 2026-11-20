@@ -76,6 +76,13 @@ var tests = new (string Name, Func<Task> Run)[]
     ("着色基准解析失败时降级", Sync(ColorBasisParseFallsBack)),
     ("未筛选时直接复用原计数", Sync(KeyFilterWithoutSelectionReusesCounts)),
     ("筛选只保留选中键的计数", Sync(KeyFilterKeepsOnlySelectedKeys)),
+    ("内置配列都能通过校验", Sync(BuiltInLayoutsAreValid)),
+    ("内置配列的键数符合名称", Sync(BuiltInLayoutKeyCountsMatchNames)),
+    ("内置配列不包含鼠标按键", Sync(BuiltInLayoutsExcludeMouseKeys)),
+    ("配列 JSON 往返保持一致", Sync(LayoutJsonRoundTrips)),
+    ("重叠的键帽会被拒绝", Sync(OverlappingLayoutIsRejected)),
+    ("未知按键名会被拒绝", Sync(UnknownLayoutKeyIsRejected)),
+    ("不支持的配列版本会被拒绝", Sync(UnsupportedLayoutVersionIsRejected)),
 };
 
 var failures = new List<string>();
@@ -1456,6 +1463,113 @@ static void KeyFilterKeepsOnlySelectedKeys()
     Equal(100UL, HeatBasis.Denominator(visible, ColorBasis.KeyboardOnly));
     Equal(800UL, HeatBasis.Denominator(visible, ColorBasis.KeyboardAndMouse));
     Equal("已筛选 2 个键", KeyFilter.Describe(new HashSet<KeyId> { KeyId.Digit1, KeyId.MouseLeftButton }));
+}
+
+static void BuiltInLayoutsAreValid()
+{
+    // 重叠、越界、重复键都会在导入时才暴露，内置配列必须先在测试里过一遍。
+    foreach (var layout in KeyLayouts.BuiltIn)
+    {
+        var errors = layout.Validate();
+        if (errors.Count > 0)
+        {
+            throw new InvalidOperationException($"{layout.Id}：" + string.Join("；", errors));
+        }
+    }
+
+    Equal(true, KeyLayouts.BuiltIn.Count >= 6);
+    Equal("ansi-104", KeyLayouts.Default.Id);
+}
+
+static void BuiltInLayoutKeyCountsMatchNames()
+{
+    // 104 / 87 / 84 / 68 / 60 是标准尺寸，键数必须对得上；
+    // 「紧凑全尺寸」两套按实际键盘缺键命名，不在这里断言键数。
+    Equal(104, KeyLayouts.Find("ansi-104")!.Caps.Count);
+    Equal(87, KeyLayouts.Find("tkl-87")!.Caps.Count);
+    Equal(84, KeyLayouts.Find("compact-84")!.Caps.Count);
+    Equal(68, KeyLayouts.Find("compact-68")!.Caps.Count);
+    Equal(61, KeyLayouts.Find("compact-60")!.Caps.Count);
+
+    // 两套紧凑全尺寸只差 PrtSc 与 Ins 两颗键（用户描述的就是这两颗）。
+    Equal(
+        KeyLayouts.Find("compact-full-98")!.Caps.Count + 2,
+        KeyLayouts.Find("compact-full-prtsc")!.Caps.Count);
+}
+
+static void BuiltInLayoutsExcludeMouseKeys()
+{
+    // 鼠标 7 键固定画在键盘下方一行，不参与配列，否则换配列会把它们弄丢。
+    foreach (var layout in KeyLayouts.BuiltIn)
+    {
+        Equal(false, layout.Caps.Any(cap => HeatBasis.IsMouseKey(cap.Id)));
+    }
+}
+
+static void LayoutJsonRoundTrips()
+{
+    var original = KeyLayouts.Default;
+    var json = KeyLayoutJson.Serialize(original);
+
+    Equal(true, KeyLayoutJson.TryParse(json, out var parsed, out var errors));
+    Equal(string.Empty, string.Join("；", errors));
+    Equal(original.Id, parsed!.Id);
+    Equal(original.Caps.Count, parsed.Caps.Count);
+    Equal(original.Columns, parsed.Columns);
+    Equal(
+        original.Caps.First(cap => cap.Id == KeyId.Space).Width,
+        parsed.Caps.First(cap => cap.Id == KeyId.Space).Width);
+}
+
+static void OverlappingLayoutIsRejected()
+{
+    const string json = """
+    {
+      "version": 1,
+      "id": "bad",
+      "name": "重叠",
+      "columns": 4,
+      "keys": [
+        { "key": "A", "x": 0, "y": 0 },
+        { "key": "B", "x": 0.5, "y": 0 }
+      ]
+    }
+    """;
+
+    Equal(false, KeyLayoutJson.TryParse(json, out _, out var errors));
+    Equal(true, errors.Any(error => error.Contains("重叠", StringComparison.Ordinal)));
+}
+
+static void UnknownLayoutKeyIsRejected()
+{
+    const string json = """
+    {
+      "version": 1,
+      "id": "bad",
+      "name": "未知键",
+      "columns": 4,
+      "keys": [ { "key": "HyperKey", "x": 0, "y": 0 } ]
+    }
+    """;
+
+    Equal(false, KeyLayoutJson.TryParse(json, out _, out var errors));
+    Equal(true, errors.Any(error => error.Contains("不是已知按键", StringComparison.Ordinal)));
+}
+
+static void UnsupportedLayoutVersionIsRejected()
+{
+    const string json = """
+    {
+      "version": 99,
+      "id": "future",
+      "name": "未来版本",
+      "columns": 4,
+      "keys": [ { "key": "A", "x": 0, "y": 0 } ]
+    }
+    """;
+
+    Equal(false, KeyLayoutJson.TryParse(json, out _, out var errors));
+    Equal(true, errors.Any(error => error.Contains("版本", StringComparison.Ordinal)));
 }
 
 static ulong[] MakeMixedCounts()

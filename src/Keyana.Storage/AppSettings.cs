@@ -32,6 +32,12 @@ public sealed class AppSettings
     /// <summary>鼠标按键与滚轮的着色基准，默认和键盘 + 鼠标的总量级比。</summary>
     public string MouseColorBasis { get; set; } = "KeyboardAndMouse";
 
+    /// <summary>
+    /// 热力图使用的键盘配列 id。找不到对应配列时回落到内置 104；
+    /// 只影响画法，不影响任何统计口径。
+    /// </summary>
+    public string KeyboardLayoutId { get; set; } = "ansi-104";
+
     public void Validate()
     {
         if (Version != 1)
@@ -67,6 +73,11 @@ public sealed class AppSettings
         {
             MouseColorBasis = "KeyboardAndMouse";
         }
+
+        // 配列 id 只做「非空」检查：具体存不存在由配列库判断，找不到就回落 104。
+        KeyboardLayoutId = string.IsNullOrWhiteSpace(KeyboardLayoutId)
+            ? "ansi-104"
+            : KeyboardLayoutId.Trim();
 
         FontFamily = string.IsNullOrWhiteSpace(FontFamily) ? string.Empty : FontFamily.Trim();
     }
