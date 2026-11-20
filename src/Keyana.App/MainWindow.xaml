@@ -65,6 +65,12 @@
                             <TextBlock x:Name="StatusText" Text="正在采集"
                                        Foreground="{DynamicResource SuccessBrush}"
                                        FontSize="{DynamicResource FontSizeSmall}" FontWeight="SemiBold" />
+                            <!-- 权限只读展示：采集能力和当前进程的令牌直接相关，
+                                 用户需要一眼看出「现在这个实例能不能采到管理员程序里的输入」。 -->
+                            <TextBlock x:Name="ElevationText" Text="· 普通权限"
+                                       Foreground="{DynamicResource TertiaryTextBrush}"
+                                       FontSize="{DynamicResource FontSizeCaption}"
+                                       Margin="5,0,0,0" VerticalAlignment="Center" />
                         </StackPanel>
                     </Border>
                     <TextBlock Text="所有数据仅保存在本机"
@@ -216,7 +222,7 @@
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <StackPanel>
-                                    <TextBlock Text="键盘热力图" Style="{StaticResource CardTitleText}" />
+                                    <TextBlock Text="键盘与鼠标热力图" Style="{StaticResource CardTitleText}" />
                                     <TextBlock x:Name="HeatmapRangeText" Text="正在加载范围…"
                                                Style="{StaticResource CaptionText}" Margin="0,3,0,0" />
                                 </StackPanel>
@@ -313,76 +319,18 @@
                         <Border Style="{StaticResource CardStyle}" Padding="18,16" Margin="0,0,14,0">
                             <StackPanel>
                                 <TextBlock Text="鼠标与滚轮" Style="{StaticResource CardTitleText}" />
-                                <TextBlock Text="与键盘共用同一套分钟聚合" Style="{StaticResource CaptionText}" Margin="0,3,0,0" />
-                                <Grid Margin="0,14,-7,0">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <Border Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
-                                        <StackPanel>
-                                            <TextBlock Text="左键" Style="{StaticResource CaptionText}" />
-                                            <TextBlock x:Name="MouseLeftText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
-                                                       FontWeight="SemiBold" Margin="0,3,0,0" />
-                                        </StackPanel>
-                                    </Border>
-                                    <Border Grid.Column="1" Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
-                                        <StackPanel>
-                                            <TextBlock Text="中键" Style="{StaticResource CaptionText}" />
-                                            <TextBlock x:Name="MouseMiddleText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
-                                                       FontWeight="SemiBold" Margin="0,3,0,0" />
-                                        </StackPanel>
-                                    </Border>
-                                    <Border Grid.Column="2" Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
-                                        <StackPanel>
-                                            <TextBlock Text="右键" Style="{StaticResource CaptionText}" />
-                                            <TextBlock x:Name="MouseRightText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
-                                                       FontWeight="SemiBold" Margin="0,3,0,0" />
-                                        </StackPanel>
-                                    </Border>
-                                    <Border Grid.Row="1" Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
-                                        <StackPanel>
-                                            <TextBlock Text="侧键 1" Style="{StaticResource CaptionText}" />
-                                            <TextBlock x:Name="MouseXButton1Text" Text="0" FontSize="{DynamicResource FontSizeTitle}"
-                                                       FontWeight="SemiBold" Margin="0,3,0,0" />
-                                        </StackPanel>
-                                    </Border>
-                                    <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
-                                        <StackPanel>
-                                            <TextBlock Text="侧键 2" Style="{StaticResource CaptionText}" />
-                                            <TextBlock x:Name="MouseXButton2Text" Text="0" FontSize="{DynamicResource FontSizeTitle}"
-                                                       FontWeight="SemiBold" Margin="0,3,0,0" />
-                                        </StackPanel>
-                                    </Border>
-                                    <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource InnerTileStyle}" Margin="0,0,7,7">
-                                        <StackPanel>
-                                            <TextBlock Text="滚轮上" Style="{StaticResource CaptionText}" />
-                                            <TextBlock x:Name="WheelUpText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
-                                                       FontWeight="SemiBold" Margin="0,3,0,0" />
-                                        </StackPanel>
-                                    </Border>
-                                    <Border Grid.Row="2" Style="{StaticResource InnerTileStyle}" Margin="0,0,7,0">
-                                        <StackPanel>
-                                            <TextBlock Text="滚轮下" Style="{StaticResource CaptionText}" />
-                                            <TextBlock x:Name="WheelDownText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
-                                                       FontWeight="SemiBold" Margin="0,3,0,0" />
-                                        </StackPanel>
-                                    </Border>
-                                    <Border Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="2"
-                                            Style="{StaticResource InnerTileStyle}" Margin="0,0,7,0">
-                                        <StackPanel>
-                                            <TextBlock Text="合计" Style="{StaticResource CaptionText}" />
-                                            <TextBlock x:Name="MouseTotalText" Text="0" FontSize="{DynamicResource FontSizeTitle}"
-                                                       FontWeight="SemiBold" Margin="0,3,0,0" />
-                                        </StackPanel>
-                                    </Border>
-                                </Grid>
+                                <!-- 逐键明细已经并进上方热力图的「鼠标」一行，这里只留总量与占比：
+                                     同一份数据不在两张卡片上各画一遍。 -->
+                                <TextBlock Text="逐键次数见上方热力图底部的「鼠标」一行"
+                                           Style="{StaticResource CaptionText}" Margin="0,3,0,0" TextWrapping="Wrap" />
+
+                                <TextBlock Text="鼠标输入" Style="{StaticResource CaptionText}" Margin="0,18,0,0" />
+                                <TextBlock x:Name="MouseTotalText" Text="0" Style="{StaticResource MetricValueText}"
+                                           Margin="0,4,0,0" />
+
+                                <TextBlock Text="占全部输入" Style="{StaticResource CaptionText}" Margin="0,14,0,0" />
+                                <TextBlock x:Name="MouseShareText" Text="0%" FontSize="{DynamicResource FontSizeTitle}"
+                                           FontWeight="SemiBold" Margin="0,3,0,0" />
                             </StackPanel>
                         </Border>
 
@@ -721,6 +669,34 @@
                                                  GroupName="FontScale" Style="{StaticResource ChipStyle}"
                                                  Checked="FontScaleChip_Checked" />
                                 </WrapPanel>
+
+                                <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,18" />
+
+                                <!-- 着色基准：键盘与鼠标分开选。鼠标左键的次数往往是任何单个键的数倍，
+                                     默认各比各的；想横向比较两边量级时可以改成「键盘 + 鼠标」。 -->
+                                <TextBlock Text="热力图着色基准" Style="{StaticResource SectionTitleText}" />
+                                <TextBlock Text="决定「最亮的键」从哪一组里挑。键盘选「键盘 + 鼠标」时，通常会被鼠标左键压得整体变浅。"
+                                           Style="{StaticResource CaptionText}" Margin="0,3,0,10" TextWrapping="Wrap" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Text="键盘" Style="{StaticResource CaptionText}" VerticalAlignment="Center"
+                                               Margin="0,0,10,0" />
+                                    <ComboBox x:Name="KeyboardBasisComboBox" Grid.Column="1" Width="170"
+                                              HorizontalAlignment="Left"
+                                              SelectionChanged="ColorBasisComboBox_SelectionChanged" />
+                                    <TextBlock Grid.Row="1" Text="鼠标" Style="{StaticResource CaptionText}"
+                                               VerticalAlignment="Center" Margin="0,8,10,0" />
+                                    <ComboBox x:Name="MouseBasisComboBox" Grid.Row="1" Grid.Column="1" Width="170"
+                                              HorizontalAlignment="Left" Margin="0,8,0,0"
+                                              SelectionChanged="ColorBasisComboBox_SelectionChanged" />
+                                </Grid>
                             </StackPanel>
                         </Border>
 
@@ -763,6 +739,44 @@
                                             Style="{StaticResource GhostButtonStyle}" Padding="12,7"
                                             Margin="8,0,0,0" Click="ClearButton_Click" />
                                 </WrapPanel>
+
+                                <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,18" />
+
+                                <!-- 进程级操作放在卡片最底部：日常使用不需要碰，
+                                     放在这里既找得到，又不会被顺手点到。 -->
+                                <TextBlock Text="应用" Style="{StaticResource SectionTitleText}" />
+                                <TextBlock Text="重启会先保存当前这一分钟的数据；完整退出会停止采集并退出程序"
+                                           Style="{StaticResource CaptionText}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <Button x:Name="RestartButton" Content="重启 Keyana"
+                                            Style="{StaticResource SecondaryButtonStyle}" Padding="14,7"
+                                            Focusable="False" Click="RestartButton_Click" />
+                                    <Button x:Name="ExitButton" Content="完整退出"
+                                            Style="{StaticResource DangerButtonStyle}" Padding="14,7"
+                                            Margin="8,0,0,0" Focusable="False" Click="ExitButton_Click" />
+                                </StackPanel>
+
+                                <Popup x:Name="RestartPopup" PlacementTarget="{Binding ElementName=RestartButton}"
+                                       Placement="Top" VerticalOffset="-8" StaysOpen="False"
+                                       AllowsTransparency="True" PopupAnimation="Fade">
+                                    <Border Background="{DynamicResource CardBackgroundBrush}"
+                                            BorderBrush="{DynamicResource CardBorderStrongBrush}"
+                                            BorderThickness="1" CornerRadius="12" Padding="8" MinWidth="248">
+                                        <StackPanel>
+                                            <TextBlock x:Name="RestartPopupHint" Style="{StaticResource CaptionText}"
+                                                       Margin="8,6,8,8" TextWrapping="Wrap" />
+                                            <Border Height="1" Background="{DynamicResource DividerBrush}"
+                                                    Margin="0,0,0,6" />
+                                            <Button x:Name="RestartNormalButton" Content="普通权限重启"
+                                                    Style="{StaticResource PopupActionButtonStyle}"
+                                                    ToolTipService.ShowOnDisabled="True"
+                                                    Click="RestartNormalButton_Click" />
+                                            <Button x:Name="RestartElevatedButton" Content="管理员权限重启"
+                                                    Style="{StaticResource PopupActionButtonStyle}"
+                                                    Margin="0,2,0,0" Click="RestartElevatedButton_Click" />
+                                        </StackPanel>
+                                    </Border>
+                                </Popup>
                             </StackPanel>
                         </Border>
                     </Grid>
@@ -856,5 +870,31 @@
                 </Grid>
             </Grid>
         </ScrollViewer>
+
+        <!-- ================= 二次确认浮层 =================
+             系统 MessageBox 在深色主题下是一块白框，和界面完全脱节；
+             这里用页面内浮层做 modal：盖住整个窗口（含侧边栏）、点遮罩不关闭、
+             Esc 等于取消、默认焦点落在「取消」上，避免一路回车退出程序。 -->
+        <Grid x:Name="ConfirmOverlay" Grid.ColumnSpan="2" Visibility="Collapsed"
+              Background="#A6000000" Focusable="True" PreviewKeyDown="ConfirmOverlay_PreviewKeyDown"
+              KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.ControlTabNavigation="Cycle">
+            <Border Width="420" Style="{StaticResource CardStyle}" Padding="24"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <TextBlock x:Name="ConfirmTitleText" Text="完整退出 Keyana"
+                               Style="{StaticResource CardTitleText}" TextWrapping="Wrap" />
+                    <TextBlock x:Name="ConfirmMessageText" Style="{StaticResource BodySecondaryText}"
+                               Margin="0,10,0,0" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,22,0,0">
+                        <Button x:Name="ConfirmCancelButton" Content="取消"
+                                Style="{StaticResource SecondaryButtonStyle}" Padding="18,8"
+                                IsCancel="True" Click="ConfirmCancelButton_Click" />
+                        <Button x:Name="ConfirmAcceptButton" Content="完整退出"
+                                Style="{StaticResource DangerSolidButtonStyle}" Padding="18,8"
+                                Margin="8,0,0,0" Click="ConfirmAcceptButton_Click" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Grid>
     </Grid>
 </Window>

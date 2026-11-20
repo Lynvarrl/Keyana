@@ -67,6 +67,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("缺少 Git 信息时构建信息降级", Sync(MissingGitInfoIsDegraded)),
     ("非哈希的 Git 输出降级为 unknown", Sync(NonHashGitOutputFallsBackToUnknown)),
     ("构建信息诊断文本包含全部字段", Sync(DiagnosticTextListsEveryField)),
+    ("键盘着色基准不受鼠标量级影响", Sync(KeyboardBasisIgnoresMouse)),
+    ("鼠标着色基准只看鼠标按键", Sync(MouseBasisIgnoresKeyboard)),
+    ("合计着色基准取全局最大键", Sync(CombinedBasisUsesGlobalMaximum)),
+    ("着色基准解析失败时降级", Sync(ColorBasisParseFallsBack)),
 };
 
 var failures = new List<string>();
@@ -1221,7 +1225,9 @@ static async Task UiSettingsFallBackToDefaultsAsync()
               "heatPalette": "BlueMagenta",
               "theme": "Neon",
               "fontFamily": "   ",
-              "fontScale": 9
+              "fontScale": 9,
+              "keyboardColorBasis": "Rainbow",
+              "mouseColorBasis": ""
             }
             """);
 
@@ -1230,6 +1236,9 @@ static async Task UiSettingsFallBackToDefaultsAsync()
         Equal(1.0, settings.FontScale);
         Equal(string.Empty, settings.FontFamily);
         Equal(true, settings.SnapToTenMinutes);
+        // 认不出的着色基准回到默认值，而不是让热力图整片变空。
+        Equal("KeyboardOnly", settings.KeyboardColorBasis);
+        Equal("KeyboardAndMouse", settings.MouseColorBasis);
     }
     finally
     {
@@ -1355,6 +1364,47 @@ static void DiagnosticTextListsEveryField()
     Contains("Git Commit : 8986a94", text);
     Contains("Git Status : Modified", text);
     Contains("Build Type : Release", text);
+}
+
+static void KeyboardBasisIgnoresMouse()
+{
+    var counts = MakeMixedCounts();
+    // 鼠标左键 800 次远高于任何键，键盘口径下不能被它拉低亮度。
+    Equal(100UL, HeatBasis.Denominator(counts, ColorBasis.KeyboardOnly));
+    Equal(1.0, Math.Round(HeatBasis.Intensity(counts[(int)KeyId.Digit1], 100UL), 4));
+    Equal(0.5, Math.Round(HeatBasis.Intensity(counts[(int)KeyId.Digit2], 100UL), 4));
+}
+
+static void MouseBasisIgnoresKeyboard()
+{
+    var counts = MakeMixedCounts();
+    Equal(800UL, HeatBasis.Denominator(counts, ColorBasis.MouseOnly));
+}
+
+static void CombinedBasisUsesGlobalMaximum()
+{
+    var counts = MakeMixedCounts();
+    Equal(800UL, HeatBasis.Denominator(counts, ColorBasis.KeyboardAndMouse));
+    // 键盘在合计口径下会被压浅，这正是该口径的语义，不是 bug。
+    Equal(0.125, Math.Round(HeatBasis.Intensity(counts[(int)KeyId.Digit1], 800UL), 4));
+    Equal(0UL, HeatBasis.Denominator(new ulong[KeyCatalog.Count], ColorBasis.KeyboardAndMouse));
+    Equal(0.0, HeatBasis.Intensity(0, 0));
+}
+
+static void ColorBasisParseFallsBack()
+{
+    Equal(ColorBasis.MouseOnly, HeatBasis.Parse("mouseonly", ColorBasis.KeyboardOnly));
+    Equal(ColorBasis.KeyboardOnly, HeatBasis.Parse("彩虹色", ColorBasis.KeyboardOnly));
+    Equal(ColorBasis.KeyboardAndMouse, HeatBasis.Parse(null, ColorBasis.KeyboardAndMouse));
+}
+
+static ulong[] MakeMixedCounts()
+{
+    var counts = new ulong[KeyCatalog.Count];
+    counts[(int)KeyId.Digit1] = 100;
+    counts[(int)KeyId.Digit2] = 50;
+    counts[(int)KeyId.MouseLeftButton] = 800;
+    return counts;
 }
 
 static RawKeyEvent MakeA() => new(0x1E, RawKeyFlags.None, 0x41);

@@ -51,6 +51,14 @@ public partial class App : System.Windows.Application
         var requestExit = eventArgs.Args.Any(
             argument => string.Equals(argument, "--exit", StringComparison.OrdinalIgnoreCase));
 
+        // 重启握手：上一实例在退出前用这个参数拉起新实例，新实例先等它真正结束，
+        // 再去抢单实例互斥量。否则新实例会看到互斥量仍被占用，误判成「重复启动」
+        // 发一个「显示窗口」信号就退出，用户看到的现象就是「重启后程序没了」。
+        if (TryGetWaitForExitPid(eventArgs.Args, out var waitForPid))
+        {
+            WaitForProcessExit(waitForPid, TimeSpan.FromSeconds(20));
+        }
+
         _singleInstanceMutex = CreateSingleInstanceMutex(SingleInstanceName, out var isFirstInstance);
         if (!isFirstInstance)
         {
@@ -94,6 +102,48 @@ public partial class App : System.Windows.Application
         else
         {
             _mainWindow.Show();
+        }
+    }
+
+    /// <summary>解析 <c>--wait-for-exit &lt;pid&gt;</c>。数字非法时按没传处理。</summary>
+    private static bool TryGetWaitForExitPid(string[] args, out int processId)
+    {
+        processId = 0;
+        for (var index = 0; index < args.Length - 1; index++)
+        {
+            if (!string.Equals(args[index], "--wait-for-exit", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (int.TryParse(args[index + 1], out var parsed) && parsed > 0)
+            {
+                processId = parsed;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// 等旧实例退出。拿不到句柄（进程已消失、或权限不足）都当作已退出继续启动：
+    /// 这里唯一不能做的是卡死在启动阶段——最多等 20 秒，超时后交给单实例检查兜底。
+    /// </summary>
+    private static void WaitForProcessExit(int processId, TimeSpan timeout)
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(processId);
+            process.WaitForExit((int)timeout.TotalMilliseconds);
+        }
+        catch (ArgumentException)
+        {
+            // 进程不存在：正是我们要的结果。
+        }
+        catch (Exception)
+        {
+            // 打开/等待失败（权限、句柄耗尽等）也不阻断启动。
         }
     }
 

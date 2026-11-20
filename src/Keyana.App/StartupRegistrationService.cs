@@ -785,6 +785,12 @@ internal sealed class StartupRegistrationService
         }
     }
 
+    /// <summary>
+    /// 当前进程是否真的以管理员权限运行。UAC 过滤令牌下返回 false——被过滤的令牌
+    /// 打不开受保护进程的输入，用它判断「能不能采到管理员程序」才是对的。
+    /// </summary>
+    internal static bool IsCurrentlyElevated() => IsProcessElevated();
+
     private static bool IsProcessElevated()
     {
         try

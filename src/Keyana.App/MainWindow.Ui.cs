@@ -105,6 +105,11 @@ public partial class MainWindow
                 ? palette
                 : HeatPalette.BlueMagenta;
 
+            _keyboardBasis = HeatBasis.Parse(settings.KeyboardColorBasis, ColorBasis.KeyboardOnly);
+            _mouseBasis = HeatBasis.Parse(settings.MouseColorBasis, ColorBasis.KeyboardAndMouse);
+            SelectColorBasis(KeyboardBasisComboBox, _keyboardBasis);
+            SelectColorBasis(MouseBasisComboBox, _mouseBasis);
+
             PaletteChipBlue.IsChecked = _currentPalette == HeatPalette.BlueMagenta;
             PaletteChipGreen.IsChecked = _currentPalette == HeatPalette.GreenAmber;
 
@@ -123,8 +128,73 @@ public partial class MainWindow
 
         ThemeManager.ApplyFromSettings(settings);
         UpdateGradientBar();
+        // 设置加载完立刻按新的着色基准重画一次：默认值可能与上次保存的不同。
+        RenderHeatmap(_counter.GetSnapshot().PressedKeys);
         RefreshStatusVisual();
         _paletteReady = true;
+    }
+
+    private void PopulateColorBasisChoices()
+    {
+        PopulateColorBasisChoices(KeyboardBasisComboBox);
+        PopulateColorBasisChoices(MouseBasisComboBox);
+    }
+
+    private static void PopulateColorBasisChoices(ComboBox comboBox)
+    {
+        comboBox.Items.Clear();
+        foreach (var (basis, label) in new[]
+                 {
+                     (ColorBasis.KeyboardOnly, "键盘"),
+                     (ColorBasis.MouseOnly, "鼠标"),
+                     (ColorBasis.KeyboardAndMouse, "键盘 + 鼠标"),
+                 })
+        {
+            comboBox.Items.Add(new ComboBoxItem { Content = label, Tag = basis.ToString() });
+        }
+    }
+
+    private static void SelectColorBasis(ComboBox comboBox, ColorBasis basis)
+    {
+        foreach (var item in comboBox.Items)
+        {
+            if (item is ComboBoxItem { Tag: string tag } && tag == basis.ToString())
+            {
+                comboBox.SelectedItem = item;
+                return;
+            }
+        }
+
+        comboBox.SelectedIndex = 0;
+    }
+
+    private static ColorBasis ReadColorBasis(ComboBox comboBox, ColorBasis fallback) =>
+        comboBox.SelectedItem is ComboBoxItem { Tag: string tag } &&
+        Enum.TryParse<ColorBasis>(tag, out var basis)
+            ? basis
+            : fallback;
+
+    private void ColorBasisComboBox_SelectionChanged(object sender, SelectionChangedEventArgs eventArgs)
+    {
+        if (!_uiReady || _settingsUiUpdating || _settings is null)
+        {
+            return;
+        }
+
+        var keyboardBasis = ReadColorBasis(KeyboardBasisComboBox, _keyboardBasis);
+        var mouseBasis = ReadColorBasis(MouseBasisComboBox, _mouseBasis);
+        if (keyboardBasis == _keyboardBasis && mouseBasis == _mouseBasis)
+        {
+            return;
+        }
+
+        _keyboardBasis = keyboardBasis;
+        _mouseBasis = mouseBasis;
+        RenderHeatmap(_counter.GetSnapshot().PressedKeys);
+
+        _settings.KeyboardColorBasis = _keyboardBasis.ToString();
+        _settings.MouseColorBasis = _mouseBasis.ToString();
+        _ = SaveSettingsAsync();
     }
 
     private void SelectFontFamily(string fontFamily)

@@ -1,3 +1,5 @@
+using Keyana.Core;
+
 namespace Keyana.Storage;
 
 public sealed class AppSettings
@@ -19,6 +21,16 @@ public sealed class AppSettings
 
     /// <summary>自定义范围是否向外吸附到 10 分钟边界。</summary>
     public bool SnapToTenMinutes { get; set; } = true;
+
+    /// <summary>
+    /// 键盘键位的着色基准：KeyboardOnly / MouseOnly / KeyboardAndMouse。
+    /// 默认只和键盘自己比——鼠标左键的次数通常远高于任何单个键，
+    /// 混在一起算会把整个键盘压成浅色。
+    /// </summary>
+    public string KeyboardColorBasis { get; set; } = "KeyboardOnly";
+
+    /// <summary>鼠标按键与滚轮的着色基准，默认和键盘 + 鼠标的总量级比。</summary>
+    public string MouseColorBasis { get; set; } = "KeyboardAndMouse";
 
     public void Validate()
     {
@@ -42,6 +54,18 @@ public sealed class AppSettings
         if (!double.IsFinite(FontScale) || FontScale is < 0.8 or > 1.5)
         {
             FontScale = 1.0;
+        }
+
+        // 着色基准同样允许被手工改坏：认不出的名字回到该字段的默认值，
+        // 不让一个拼错的枚举名把热力图整片刷成空色。
+        if (!Enum.TryParse<ColorBasis>(KeyboardColorBasis, ignoreCase: true, out _))
+        {
+            KeyboardColorBasis = "KeyboardOnly";
+        }
+
+        if (!Enum.TryParse<ColorBasis>(MouseColorBasis, ignoreCase: true, out _))
+        {
+            MouseColorBasis = "KeyboardAndMouse";
         }
 
         FontFamily = string.IsNullOrWhiteSpace(FontFamily) ? string.Empty : FontFamily.Trim();

@@ -70,6 +70,10 @@ public partial class MainWindow : Window
     private HashSet<KeyId> _lastVisualPressed = [];
     private HeatPalette _currentPalette = HeatPalette.BlueMagenta;
     private HeatScaleMode _currentScaleMode = HeatScaleMode.SquareRoot;
+    private ColorBasis _keyboardBasis = ColorBasis.KeyboardOnly;
+    private ColorBasis _mouseBasis = ColorBasis.KeyboardAndMouse;
+    private bool _isElevated;
+    private TaskCompletionSource<bool>? _confirmCompletion;
 
     public MainWindow()
     {
@@ -101,10 +105,22 @@ public partial class MainWindow : Window
         KeyChipList.ItemsSource = _rowsView;
 
         PopulateFontFamilyChoices();
+        PopulateColorBasisChoices();
+        // 先按默认口径选中，别留两个空白下拉框：设置要等存储初始化完才读回来，
+        // 这段时间里用户第一眼看到的就是它们。
+        SelectColorBasis(KeyboardBasisComboBox, _keyboardBasis);
+        SelectColorBasis(MouseBasisComboBox, _mouseBasis);
+        ApplyElevationState();
         UpdateDurationTexts();
         InitializeActivityDefaults();
         InitializeAnalysisDefaults();
-        HeatmapKeyboard.SetData(_selectedCounts, new HashSet<KeyId>(), _currentScaleMode, _currentPalette);
+        HeatmapKeyboard.SetData(
+            _selectedCounts,
+            new HashSet<KeyId>(),
+            _currentScaleMode,
+            _currentPalette,
+            _keyboardBasis,
+            _mouseBasis);
         DailyTimeline.SetData(_selectedDisplayTimeCounts, _currentPalette);
         ActivityStrip.SetPalette(_currentPalette);
         AnalysisDailyStrip.SetPalette(_currentPalette);
@@ -632,6 +648,26 @@ public partial class MainWindow : Window
     private Brush FindBrush(string key) =>
         Application.Current.TryFindResource(key) as Brush ?? Brushes.Gray;
 
+    /// <summary>
+    /// 侧边栏只读展示当前进程的权限。
+    ///
+    /// 进程启动之后令牌不会再变，所以只在构造时取一次；用户判断「现在这个实例能不能
+    /// 采到以管理员运行的游戏里的输入」，靠的就是这一行字。不做成按钮：切换权限必须
+    /// 重启进程，入口统一放在设置页的重启浮层里。
+    /// </summary>
+    private void ApplyElevationState()
+    {
+        _isElevated = StartupRegistrationService.IsCurrentlyElevated();
+        ElevationText.Text = _isElevated ? "· 管理员权限" : "· 普通权限";
+        // 两种状态都不上色（不用黄/红），靠文字区分；但也不用最浅的灰，
+        // 这一行的用途就是让人一眼确认，太淡等于没有。
+        ElevationText.Foreground = FindBrush("SecondaryTextBrush");
+        ElevationText.ToolTip = _isElevated
+            ? "当前以管理员权限运行。以管理员权限运行的程序（如部分游戏）内的输入也会被统计。"
+            : "当前为普通权限。以管理员权限运行的程序（如部分游戏）内的输入不会被统计。\n" +
+              "可到设置页勾选「以管理员权限自启」，或在设置页用「重启」选择管理员权限重启。";
+    }
+
     private void SetStorageError(string message)
     {
         TotalHistoryText.Text = "总数量：不可用";
@@ -726,6 +762,164 @@ public partial class MainWindow : Window
         Application.Current.Shutdown();
     }
 
+    private async void ExitButton_Click(object sender, RoutedEventArgs eventArgs)
+    {
+        if (_isClosing || _confirmCompletion is not null)
+        {
+            return;
+        }
+
+        var confirmed = await ShowConfirmAsync(
+            "完整退出 Keyana",
+            "退出后将停止键盘与鼠标采集。当前这一分钟的数据会先写入磁盘，已保存的历史数据不受影响。",
+            "完整退出");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        await ExitApplicationAsync(confirm: false);
+    }
+
+    /// <summary>
+    /// 页面内的二次确认浮层。
+    ///
+    /// 与托盘里的系统 MessageBox 并存：托盘触发时窗口可能是隐藏的，必须用系统框；
+    /// 在主界面里则用这个浮层，才能跟随深色主题、并把默认焦点压在「取消」上。
+    /// </summary>
+    private Task<bool> ShowConfirmAsync(string title, string message, string acceptText)
+    {
+        ConfirmTitleText.Text = title;
+        ConfirmMessageText.Text = message;
+        ConfirmAcceptButton.Content = acceptText;
+        ConfirmOverlay.Visibility = Visibility.Visible;
+
+        _confirmCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ConfirmCancelButton.Focus();
+        Keyboard.Focus(ConfirmCancelButton);
+        return _confirmCompletion.Task;
+    }
+
+    private void CloseConfirm(bool accepted)
+    {
+        if (_confirmCompletion is not { } completion)
+        {
+            return;
+        }
+
+        _confirmCompletion = null;
+        ConfirmOverlay.Visibility = Visibility.Collapsed;
+        completion.TrySetResult(accepted);
+    }
+
+    private void ConfirmCancelButton_Click(object sender, RoutedEventArgs eventArgs) => CloseConfirm(false);
+
+    private void ConfirmAcceptButton_Click(object sender, RoutedEventArgs eventArgs) => CloseConfirm(true);
+
+    private void ConfirmOverlay_PreviewKeyDown(object sender, KeyEventArgs eventArgs)
+    {
+        if (eventArgs.Key == Key.Escape)
+        {
+            CloseConfirm(false);
+            eventArgs.Handled = true;
+        }
+    }
+
+    private void RestartButton_Click(object sender, RoutedEventArgs eventArgs)
+    {
+        if (_isClosing)
+        {
+            return;
+        }
+
+        RestartPopupHint.Text = _isElevated
+            ? "当前以管理员权限运行，重启后仍是管理员权限。"
+            : "当前为普通权限。以管理员权限重启会弹出一次 UAC。";
+
+        // Windows 没有「从高完整性进程降权启动」的公开接口：为了避免出现
+        // 点了没反应、或者用计划任务绕一圈的复杂度，直接在管理员进程里禁用这一项。
+        RestartNormalButton.IsEnabled = !_isElevated;
+        RestartNormalButton.ToolTip = _isElevated
+            ? "当前已是管理员权限，Windows 不支持直接降权重启。需要普通权限请先完整退出，再从开始菜单或任务栏重新打开。"
+            : null;
+
+        RestartPopup.IsOpen = true;
+    }
+
+    private async void RestartNormalButton_Click(object sender, RoutedEventArgs eventArgs) =>
+        await RestartAsync(asAdministrator: false);
+
+    private async void RestartElevatedButton_Click(object sender, RoutedEventArgs eventArgs) =>
+        await RestartAsync(asAdministrator: true);
+
+    /// <summary>
+    /// 重启：先保存，再拉起「等旧进程退出」的新实例，最后走完整退出流程。
+    ///
+    /// 顺序不能反：新实例如果先跑起来，会发现单实例互斥量还被自己持有，误判成重复启动
+    /// 直接退出，结果就是「点重启等于退出」。所以新实例带 --wait-for-exit，先等旧进程
+    /// 结束再进入正常的单实例检查。提权重启时先弹 UAC，用户取消就什么都不做。
+    /// </summary>
+    private async Task RestartAsync(bool asAdministrator)
+    {
+        RestartPopup.IsOpen = false;
+        if (_isClosing)
+        {
+            return;
+        }
+
+        var executable = Environment.ProcessPath;
+        if (string.IsNullOrEmpty(executable))
+        {
+            MessageBox.Show(this, "无法确定 Keyana 可执行文件路径，重启失败。", "Keyana",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        await SaveSettingsAsync();
+        if (_recorder is not null)
+        {
+            try
+            {
+                await _recorder.FlushNowAsync(_lifetimeCancellation.Token);
+            }
+            catch (Exception exception) when (!_isClosing)
+            {
+                // 落盘失败不阻止重启：待写数据仍会在退出流程里再试一次。
+                ErrorLog.Record("Restart.Flush", exception);
+            }
+        }
+
+        var startInfo = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = executable,
+            Arguments = $"--wait-for-exit {Environment.ProcessId}",
+            UseShellExecute = true,
+        };
+        if (asAdministrator && !_isElevated)
+        {
+            startInfo.Verb = "runas";
+        }
+
+        try
+        {
+            System.Diagnostics.Process.Start(startInfo);
+        }
+        catch (Win32Exception exception) when (exception.NativeErrorCode == 1223)
+        {
+            // ERROR_CANCELLED：用户在 UAC 上点了「否」。什么都不做，程序继续运行。
+            return;
+        }
+        catch (Exception exception)
+        {
+            ErrorLog.Record("Restart", exception);
+            MessageBox.Show(this, $"无法重新启动 Keyana。\n\n{exception.Message}", "Keyana",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        await ExitApplicationAsync(confirm: false);
+    }
+
     private void MainWindow_Closing(object? sender, CancelEventArgs eventArgs)
     {
         if (_closeCompleted)
@@ -733,6 +927,8 @@ public partial class MainWindow : Window
             return;
         }
 
+        // 收进托盘时把没处理完的确认浮层收掉：窗口隐藏后浮层还留在屏幕上会挡住别的程序。
+        CloseConfirm(false);
         eventArgs.Cancel = true;
         Hide();
     }

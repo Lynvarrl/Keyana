@@ -28,6 +28,8 @@ public sealed class KeyboardHeatmapControl : Viewbox
     private IReadOnlySet<KeyId> _lastPressed = new HashSet<KeyId>();
     private HeatScaleMode _lastScaleMode = HeatScaleMode.SquareRoot;
     private HeatPalette _lastPalette = HeatPalette.BlueMagenta;
+    private ColorBasis _lastKeyboardBasis = ColorBasis.KeyboardOnly;
+    private ColorBasis _lastMouseBasis = ColorBasis.KeyboardAndMouse;
     private bool _themeHooked;
 
     public KeyboardHeatmapControl()
@@ -37,21 +39,30 @@ public sealed class KeyboardHeatmapControl : Viewbox
         HorizontalAlignment = HorizontalAlignment.Stretch;
         VerticalAlignment = VerticalAlignment.Stretch;
 
+        // 比键盘多一行：鼠标按键与滚轮按同样的键帽样式排在键盘下方，
+        // 这样「鼠标没有热力图」不再是信息缺口，也不需要另开一张卡片。
         var canvas = new Canvas
         {
             Width = 24 * Step,
-            Height = (6 * Step) + 4,
+            Height = (7 * Step) + 6,
             Background = Brushes.Transparent,
         };
         Child = canvas;
         BuildKeyboard(canvas);
+        BuildMouseRow(canvas);
 
         Loaded += (_, _) => HookTheme();
         Unloaded += (_, _) => UnhookTheme();
         HookTheme();
     }
 
-    public void SetData(IReadOnlyList<ulong> counts, IReadOnlySet<KeyId> pressedKeys, HeatScaleMode scaleMode, HeatPalette palette = HeatPalette.BlueMagenta)
+    public void SetData(
+        IReadOnlyList<ulong> counts,
+        IReadOnlySet<KeyId> pressedKeys,
+        HeatScaleMode scaleMode,
+        HeatPalette palette = HeatPalette.BlueMagenta,
+        ColorBasis keyboardBasis = ColorBasis.KeyboardOnly,
+        ColorBasis mouseBasis = ColorBasis.KeyboardAndMouse)
     {
         if (counts.Count != KeyCatalog.Count)
         {
@@ -62,6 +73,8 @@ public sealed class KeyboardHeatmapControl : Viewbox
         _lastPressed = pressedKeys;
         _lastScaleMode = scaleMode;
         _lastPalette = palette;
+        _lastKeyboardBasis = keyboardBasis;
+        _lastMouseBasis = mouseBasis;
         Render();
     }
 
@@ -72,8 +85,8 @@ public sealed class KeyboardHeatmapControl : Viewbox
         var scaleMode = _lastScaleMode;
         var palette = _lastPalette;
 
-        var displayedCounts = _keyCaps.Keys.Select(key => counts[(int)key]).ToArray();
-        var maximum = displayedCounts.DefaultIfEmpty().Max();
+        var keyboardDenominator = HeatBasis.Denominator(counts, _lastKeyboardBasis);
+        var mouseDenominator = HeatBasis.Denominator(counts, _lastMouseBasis);
         var total = counts.Aggregate(0UL, (sum, count) => checked(sum + count));
         var ranks = counts
             .Select((count, index) => (Count: count, Key: (KeyId)index))
@@ -92,7 +105,9 @@ public sealed class KeyboardHeatmapControl : Viewbox
         foreach (var (keyId, visual) in _keyCaps)
         {
             var count = counts[(int)keyId];
-            var intensity = maximum == 0 ? 0d : count / (double)maximum;
+            // 键帽和鼠标各按自己的基准着色：谁也不必迁就对方的量级。
+            var denominator = HeatBasis.IsMouseKey(keyId) ? mouseDenominator : keyboardDenominator;
+            var intensity = HeatBasis.Intensity(count, denominator);
             if (scaleMode == HeatScaleMode.SquareRoot)
             {
                 intensity = Math.Sqrt(intensity);
@@ -110,7 +125,11 @@ public sealed class KeyboardHeatmapControl : Viewbox
 
             var percentage = total == 0 ? 0d : count * 100d / total;
             var rankText = ranks.TryGetValue(keyId, out var rank) ? rank.ToString() : "—";
-            visual.Border.ToolTip = $"{KeyCatalog.Get(keyId).DisplayName}\n次数：{count:N0}\n占全部输入：{percentage:F2}%\n排名：{rankText}";
+            // 着色基准直接写进提示：换基准后颜色变了，用户得能看出「变淡」是基准造成的。
+            var basisText = denominator == 0
+                ? "着色基准：暂无数据"
+                : $"着色基准：{denominator:N0} 次（本键占 {count * 100d / denominator:F1}%）";
+            visual.Border.ToolTip = $"{KeyCatalog.Get(keyId).DisplayName}\n次数：{count:N0}\n占全部输入：{percentage:F2}%\n排名：{rankText}\n{basisText}";
         }
     }
 
@@ -194,6 +213,37 @@ public sealed class KeyboardHeatmapControl : Viewbox
             K(KeyId.ArrowLeft, "←"), K(KeyId.ArrowDown, "↓"), K(KeyId.ArrowRight, "→"));
         Add(canvas, KeyId.Numpad0, "0", 20, 5, 2);
         Add(canvas, KeyId.NumpadDecimal, ".", 22, 5);
+    }
+
+    /// <summary>
+    /// 鼠标一行：左 / 中 / 右、侧键 1 / 2、滚轮上 / 下，样式与键帽完全一致。
+    ///
+    /// 不画鼠标轮廓：数据只有 7 个按钮，形状本身不承载信息，反而会把卡片撑高；
+    /// 用同样的键帽排一行，颜色、悬停提示、按下高亮都自动与键盘保持一致。
+    /// </summary>
+    private void BuildMouseRow(Canvas canvas)
+    {
+        var label = new TextBlock
+        {
+            Text = "鼠标",
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(ControlTheme.WeakText),
+        };
+        Canvas.SetLeft(label, 0);
+        // 与键帽文字行垂直居中对齐，不靠猜像素：单元高减去一行小字的高度后对半分。
+        Canvas.SetTop(label, (6 * Step) + ((Unit - 15) / 2));
+        canvas.Children.Add(label);
+
+        const double mouseWidth = 1.5;
+        AddSequence(canvas, 2, 6,
+            K(KeyId.MouseLeftButton, "左键", mouseWidth),
+            K(KeyId.MouseMiddleButton, "中键", mouseWidth),
+            K(KeyId.MouseRightButton, "右键", mouseWidth),
+            K(KeyId.MouseXButton1, "侧键1", mouseWidth),
+            K(KeyId.MouseXButton2, "侧键2", mouseWidth),
+            K(KeyId.MouseWheelUp, "滚轮↑", mouseWidth),
+            K(KeyId.MouseWheelDown, "滚轮↓", mouseWidth));
     }
 
     private void AddSequence(Canvas canvas, double startX, double y, params KeySpec[] keys)
