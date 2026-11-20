@@ -1,7 +1,11 @@
 ﻿param(
     [string]$OutputDirectory = "artifacts",
     # 只构建框架依赖的精简版，跳过自带运行时的完整版。本地调试时省一半时间与磁盘。
-    [switch]$LiteOnly
+    [switch]$LiteOnly,
+    # 构建渠道。Release 走 Release 配置，产出 zip 与校验和；
+    # Development 走 Debug 配置，只产出一个可直接运行的文件夹到 artifacts\dev，不打 zip。
+    [ValidateSet("Release", "Development")]
+    [string]$Channel = "Release"
 )
 
 $ErrorActionPreference = "Stop"
@@ -123,6 +127,56 @@ if ([string]::IsNullOrWhiteSpace($version)) {
     throw "无法从 $projectPath 读取 <Version>；发布脚本需要它来命名产物。"
 }
 
+# 渠道决定构建配置：BuildInfo 的 Build Type 就取自配置名（Debug 之外的配置一律按
+# Development 处理），所以这里不能再写死在 publish 调用里。
+$configuration = if ($Channel -eq "Release") { "Release" } else { "Debug" }
+
+# 正式包不允许带 -dev：它是渠道后缀，由构建配置派生，写进版本号会让 Release 版
+# 在界面上显示成 1.3.5-dev，与「Release 只显示数字版本号」直接冲突。
+if ($Channel -eq "Release" -and $version -match '(?i)-dev(\.|$)') {
+    throw "csproj 的 <Version> 是 $version：带 -dev 的版本只能出 Development 渠道（-Channel Development），不能当作正式包发布。"
+}
+
+# Development：只产出一个可直接运行的文件夹，不复制发行文档、不打 zip、不写校验和。
+# 这里刻意不启用 PublishSingleFile：调试要的是最新的 exe 和 pdb，单文件会把符号藏起来、
+# 拖慢启动，对本地调试只有坏处。
+if ($Channel -eq "Development") {
+    $devOutput = [System.IO.Path]::GetFullPath((Join-Path $artifactsRoot "dev"))
+    if (-not $devOutput.StartsWith($artifactsRoot + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "拒绝清理 artifacts 目录以外的路径：$devOutput"
+    }
+
+    # dev 版正在运行时 exe 被映射，Remove-Item 会失败在一半；先探一次占用，
+    # 给出能直接照做的提示，比让 dotnet publish 抛 MSB3021 好排查。
+    $devExe = Join-Path $devOutput "Keyana.exe"
+    if (Test-Path -LiteralPath $devExe) {
+        try {
+            $probe = [System.IO.File]::Open($devExe, 'Open', 'ReadWrite', 'None')
+            $probe.Dispose()
+        }
+        catch {
+            throw "开发版正在运行（$devExe 被占用）。请先从托盘退出它，再重新构建。"
+        }
+    }
+
+    if (Test-Path -LiteralPath $devOutput) {
+        # Data 跨构建保留：开发时反复重编，设置、主题和攒下来的统计不该每次都清零。
+        # 想要干净环境时手动删掉 artifacts\dev\Data 即可。
+        Get-ChildItem -LiteralPath $devOutput -Force |
+            Where-Object { $_.Name -ne "Data" } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+    }
+
+    New-Item -ItemType Directory -Path $devOutput -Force | Out-Null
+    Invoke-DotNet @(
+        "publish", $projectPath, "-c", $configuration, "-r", "win-x64", "--self-contained", "false",
+        "-o", $devOutput
+    )
+
+    Write-Host "开发版构建完成：$devOutput"
+    return
+}
+
 $fullOutput = Join-Path $artifactsRoot "v$version-full"
 $liteOutput = Join-Path $artifactsRoot "v$version-lite"
 
@@ -141,7 +195,7 @@ foreach ($target in $outputsToClean) {
 
 if (-not $LiteOnly) {
     Invoke-DotNet @(
-        "publish", $projectPath, "-c", "Release", "-r", "win-x64", "--self-contained", "true",
+        "publish", $projectPath, "-c", $configuration, "-r", "win-x64", "--self-contained", "true",
         "-p:PublishSingleFile=true",
         "-p:IncludeNativeLibrariesForSelfExtract=true",
         "-p:EnableCompressionInSingleFile=true",
@@ -156,7 +210,7 @@ if (-not $LiteOnly) {
 }
 
 Invoke-DotNet @(
-    "publish", $projectPath, "-c", "Release", "-r", "win-x64", "--self-contained", "false",
+    "publish", $projectPath, "-c", $configuration, "-r", "win-x64", "--self-contained", "false",
     "-p:PublishSingleFile=true",
     "-p:IncludeNativeLibrariesForSelfExtract=true",
     "-p:DebugType=None",

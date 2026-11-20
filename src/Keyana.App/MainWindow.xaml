@@ -30,6 +30,8 @@
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <!-- 仅 Development 构建使用的构建标识行；Release 下 Collapsed，不占高度。 -->
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <StackPanel Orientation="Horizontal">
@@ -81,6 +83,14 @@
 
                 <TextBlock Grid.Row="4" x:Name="VersionText" Style="{StaticResource CaptionText}"
                            Foreground="{DynamicResource TertiaryTextBrush}" Margin="2,0,0,0" />
+
+                <!-- 调试用：只有 Development 构建显示这行 Build ID，用来确认眼前这个进程
+                     是不是刚编出来的那个；Release 构建下 Collapsed，侧边栏与之前完全一致。 -->
+                <TextBlock Grid.Row="5" x:Name="BuildStampText" Visibility="Collapsed"
+                           Style="{StaticResource MonoText}"
+                           Foreground="{DynamicResource TertiaryTextBrush}"
+                           FontSize="{DynamicResource FontSizeCaption}"
+                           Margin="2,3,0,0" />
             </Grid>
         </Border>
 

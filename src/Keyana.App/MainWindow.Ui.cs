@@ -57,6 +57,26 @@ public partial class MainWindow
         CopyBuildInfoButton.ToolTip = "复制完整构建信息";
     }
 
+    /// <summary>
+    /// 侧边栏版本号下方的构建标识。只有 Development 构建显示：调试时要一眼确认眼前
+    /// 这个进程是不是刚编出来的那一个；Release 构建保持侧边栏只有版本号。
+    /// 取值来自同一个 BuildInfo，和「关于」卡片、startup.log 里的 Build ID 完全一致。
+    /// </summary>
+    private void ApplyBuildStamp(BuildInfo build)
+    {
+        if (build.DisplayBuildId is not { } buildId)
+        {
+            BuildStampText.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        BuildStampText.Text = buildId;
+        BuildStampText.ToolTip = build.GitCommit == BuildInfo.UnknownValue
+            ? $"Build ID {buildId}"
+            : $"Build ID {buildId}\nGit {build.GitCommit} · {build.GitStatusText}";
+        BuildStampText.Visibility = Visibility.Visible;
+    }
+
     private async void CopyBuildInfoButton_Click(object sender, RoutedEventArgs eventArgs)
     {
         try

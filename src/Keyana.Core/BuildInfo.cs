@@ -67,12 +67,28 @@ public sealed record BuildInfo
     public BuildChannel BuildType { get; }
 
     /// <summary>
-    /// 侧边栏与「关于」共用的版本标签：Release 只给数字版本号，Development 追加 <c>-dev</c>。
+    /// 对外展示的版本标签：Release 只给数字版本号，Development 追加 <c>-dev</c>。
     /// 版本号本身已经带预发布标识（如 <c>1.4.0-alpha.1</c>）时原样保留，不再重复追加。
+    ///
+    /// <c>-dev</c> 是渠道后缀，不属于版本主体：csproj 里若误写成 <c>1.3.5-dev</c>，
+    /// 这里先剥掉再按渠道决定，避免 Release 构建带着 <c>-dev</c> 发出去。
     /// </summary>
-    public string DisplayVersion => HasPrereleaseTag(Version) || BuildType == BuildChannel.Release
-        ? Version
-        : string.Concat(Version, "-dev");
+    public string DisplayVersion
+    {
+        get
+        {
+            var core = StripDevelopmentSuffix(Version);
+            return BuildType == BuildChannel.Release || HasPrereleaseTag(core)
+                ? core
+                : string.Concat(core, "-dev");
+        }
+    }
+
+    /// <summary>
+    /// 侧边栏在 Development 构建下追加显示的构建标识；Release 构建为 <c>null</c>，不显示。
+    /// 取值与「关于」卡片、启动日志完全一致，便于把界面上的值和日志对上。
+    /// </summary>
+    public string? DisplayBuildId => BuildType == BuildChannel.Development ? BuildId : null;
 
     /// <summary>工作区状态的可读文本（Clean / Modified / Unknown）。</summary>
     public string GitStatusText => GitStatus switch
@@ -163,5 +179,21 @@ public sealed record BuildInfo
     {
         var separator = version.IndexOf('-');
         return separator > 0 && separator < version.Length - 1;
+    }
+
+    /// <summary>
+    /// 去掉版本号尾部由渠道派生的 <c>-dev</c>。只处理这一种后缀：
+    /// alpha / beta / rc 是真正的预发布标识，必须保留。
+    /// </summary>
+    private static string StripDevelopmentSuffix(string version)
+    {
+        if (!version.EndsWith("-dev", StringComparison.OrdinalIgnoreCase))
+        {
+            return version;
+        }
+
+        var core = version[..^4];
+        // 版本号只有 "-dev" 时剥完是空串，宁可原样保留，也不要展示一个空版本。
+        return core.Length == 0 ? version : core;
     }
 }

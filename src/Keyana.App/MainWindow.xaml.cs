@@ -93,6 +93,7 @@ public partial class MainWindow : Window
         VersionText.Text = $"v{build.DisplayVersion}";
         AboutVersionText.Text = $"Keyana v{build.DisplayVersion} · MIT License";
         ApplyBuildInfo(build);
+        ApplyBuildStamp(build);
 
         _startupRegistration = new StartupRegistrationService(
             Environment.ProcessPath ?? throw new InvalidOperationException("无法确定 Keyana 可执行文件路径。"));

@@ -1,14 +1,23 @@
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;
+using Keyana.Core;
 
 namespace Keyana.App;
 
 public partial class App : System.Windows.Application
 {
-    private const string SingleInstanceName = @"Local\Keyana.SingleInstance.v1";
-    private const string ShowSignalName = @"Local\Keyana.Show.v1";
-    private const string ExitSignalName = @"Local\Keyana.Exit.v1";
+    // 单实例锁与两个信号按构建渠道分开：Development 版必须能和正在运行的正式版并存，
+    // 否则双击刚编出来的 exe 只会给旧实例发一个「显示窗口」信号，看到的还是旧版本号，
+    // 很容易误判成「构建没生效」。
+    // Release 刻意沿用历史名称（不加后缀）：升级瞬间新旧实例仍能互相识别，
+    // 不会短暂地同时采集、同时驻留两个托盘图标。
+    private static readonly string InstanceScope =
+        BuildInfoProvider.Current.BuildType == BuildChannel.Release ? string.Empty : ".development";
+
+    private static readonly string SingleInstanceName = $@"Local\Keyana.SingleInstance{InstanceScope}.v1";
+    private static readonly string ShowSignalName = $@"Local\Keyana.Show{InstanceScope}.v1";
+    private static readonly string ExitSignalName = $@"Local\Keyana.Exit{InstanceScope}.v1";
 
     // 允许 Everyone 访问，并把命名内核对象的强制完整性标签设为 Low。
     // 任务计划以最高权限启动的后台实例运行在高完整性级别（High IL）；若之后用户以

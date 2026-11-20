@@ -61,7 +61,10 @@ var tests = new (string Name, Func<Task> Run)[]
     ("逐日汇总识别活跃日、火热日与逐小时分布", DailyUsageMarksActiveAndFireDaysAsync),
     ("界面设置损坏时降级为默认值", UiSettingsFallBackToDefaultsAsync),
     ("Release 构建只显示数字版本号", Sync(ReleaseBuildShowsNumericVersion)),
+    ("Release 构建剥离版本号里的 -dev", Sync(ReleaseBuildStripsDevelopmentSuffix)),
+    ("Development 构建不重复追加 -dev", Sync(DevelopmentBuildDoesNotDoubleDevSuffix)),
     ("Development 构建版本号带 -dev", Sync(DevelopmentBuildAppendsDevSuffix)),
+    ("只有 Development 构建展示 Build ID", Sync(BuildIdIsShownOnlyInDevelopment)),
     ("-dev 后缀与工作区是否干净无关", Sync(DevSuffixIsIndependentOfGitStatus)),
     ("预发布版本保留既有渠道标识", Sync(PrereleaseTagIsKept)),
     ("缺少 Git 信息时构建信息降级", Sync(MissingGitInfoIsDegraded)),
@@ -1317,6 +1320,34 @@ static void DevelopmentBuildAppendsDevSuffix()
     Equal("Development", build.BuildTypeText);
     // 渠道标识与工作区状态无关：工作区干净也照样带 -dev。
     Equal("Clean", build.GitStatusText);
+}
+
+static void ReleaseBuildStripsDevelopmentSuffix()
+{
+    // csproj 里误写成 1.3.5-dev 时，正式包也不能带着渠道后缀发出去：
+    // -dev 是构建配置派生的标记，不属于版本主体。
+    var build = BuildInfo.FromRaw("1.3.5-dev", "20261120-153106", "9d8a9ff", "Clean", "Release");
+
+    Equal("1.3.5", build.DisplayVersion);
+}
+
+static void DevelopmentBuildDoesNotDoubleDevSuffix()
+{
+    var build = BuildInfo.FromRaw("1.3.5-dev", "20261120-153106", "9d8a9ff", "Clean", "Debug");
+
+    Equal("1.3.5-dev", build.DisplayVersion);
+}
+
+static void BuildIdIsShownOnlyInDevelopment()
+{
+    var development = BuildInfo.FromRaw("1.3.5", "20261120-153106", "9d8a9ff", "Clean", "Debug");
+    var release = BuildInfo.FromRaw("1.3.5", "20261120-153106", "9d8a9ff", "Clean", "Release");
+
+    // 侧边栏只在开发版多显示一行构建标识，正式版保持只有版本号。
+    Equal("20261120-153106", development.DisplayBuildId);
+    Equal<string?>(null, release.DisplayBuildId);
+    Equal("1.3.5-dev", development.DisplayVersion);
+    Equal("1.3.5", release.DisplayVersion);
 }
 
 static void DevSuffixIsIndependentOfGitStatus()
