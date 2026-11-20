@@ -6,7 +6,8 @@
     <AssemblyName>Keyana</AssemblyName>
     <RootNamespace>Keyana.App</RootNamespace>
     <!-- 版本号只在这里维护：FileVersion / InformationalVersion 由 SDK 从这里派生，
-         窗口标题由 AppInfo 在运行时读取，发布脚本也从本文件读取。 -->
+         Build ID、Git 信息与构建渠道由下面的 GenerateBuildInfo 目标从这里取版本号后
+         一起编译进程序集，发布脚本也从本文件读取。 -->
     <Version>1.3.4</Version>
     <ApplicationIcon>Assets\Keyana.ico</ApplicationIcon>
     <ApplicationManifest>app.manifest</ApplicationManifest>
@@ -19,4 +20,34 @@
     <ProjectReference Include="..\Keyana.Storage\Keyana.Storage.csproj" />
     <Resource Include="Assets\Keyana.ico" />
   </ItemGroup>
+
+  <!--
+    构建信息（Build ID / Git 提交 / 工作区状态 / 构建渠道）只在构建阶段生成一次，
+    写进 obj 下的 BuildMetadata.g.cs 后随程序集一起编译。这样：
+    1. 同一份产物启动多少次都是同一个 Build ID；
+    2. 打包成独立 EXE 后不再依赖 Git 仓库，也不读任何外部文件；
+    3. 拿不到 Git 时脚本内部降级为 unknown，不会让构建失败。
+    Version 直接取上面的 <Version>，版本号仍然只有这一处来源。
+  -->
+  <Target Name="GenerateBuildInfo" BeforeTargets="BeforeCompile;CoreCompile">
+    <PropertyGroup>
+      <BuildInfoFile>$(IntermediateOutputPath)BuildMetadata.g.cs</BuildInfoFile>
+    </PropertyGroup>
+
+    <Exec Command="powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\..\scripts\build-info.ps1&quot; -OutputPath &quot;$(BuildInfoFile)&quot; -Version &quot;$(Version)&quot; -Configuration &quot;$(Configuration)&quot; -RepositoryRoot &quot;$(MSBuildProjectDirectory)\..\..&quot;"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          IgnoreExitCode="true"
+          StandardOutputImportance="low"
+          StandardErrorImportance="low" />
+
+    <!-- Git 拿不到不算错误（脚本会写 unknown），但连生成文件都没有就是环境坏了，
+         这里给出明确提示，免得只在编译器里看到一句找不到源文件。 -->
+    <Error Condition="!Exists('$(BuildInfoFile)')"
+           Text="构建信息生成失败：$(BuildInfoFile) 不存在。请确认 scripts/build-info.ps1 存在且 Windows PowerShell 可用。" />
+
+    <ItemGroup>
+      <Compile Include="$(BuildInfoFile)" />
+      <FileWrites Include="$(BuildInfoFile)" />
+    </ItemGroup>
+  </Target>
 </Project>

@@ -63,6 +63,19 @@
             <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
         </Style>
 
+        <!-- 构建信息：设置页「关于」卡片右下角的辅助区，比正文低一级，
+             标签用三级文字色，数值用等宽字体保证 Build ID 与提交哈希对得整齐。 -->
+        <Style x:Key="BuildInfoLabelText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="{DynamicResource FontSizeCaption}" />
+            <Setter Property="Foreground" Value="{DynamicResource TertiaryTextBrush}" />
+        </Style>
+
+        <Style x:Key="BuildInfoValueText" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, Courier New" />
+            <Setter Property="FontSize" Value="{DynamicResource FontSizeSmall}" />
+            <Setter Property="Foreground" Value="{DynamicResource SecondaryTextBrush}" />
+        </Style>
+
         <!-- ============ 卡片 ============ -->
         <Style x:Key="CardStyle" TargetType="Border">
             <Setter Property="Background" Value="{DynamicResource CardBackgroundBrush}" />

@@ -60,6 +60,13 @@ var tests = new (string Name, Func<Task> Run)[]
     ("滚轮脉冲可连续计数且不进入按下状态", Sync(WheelImpulseCountsRepeatedly)),
     ("逐日汇总识别活跃日、火热日与逐小时分布", DailyUsageMarksActiveAndFireDaysAsync),
     ("界面设置损坏时降级为默认值", UiSettingsFallBackToDefaultsAsync),
+    ("Release 构建只显示数字版本号", Sync(ReleaseBuildShowsNumericVersion)),
+    ("Development 构建版本号带 -dev", Sync(DevelopmentBuildAppendsDevSuffix)),
+    ("-dev 后缀与工作区是否干净无关", Sync(DevSuffixIsIndependentOfGitStatus)),
+    ("预发布版本保留既有渠道标识", Sync(PrereleaseTagIsKept)),
+    ("缺少 Git 信息时构建信息降级", Sync(MissingGitInfoIsDegraded)),
+    ("非哈希的 Git 输出降级为 unknown", Sync(NonHashGitOutputFallsBackToUnknown)),
+    ("构建信息诊断文本包含全部字段", Sync(DiagnosticTextListsEveryField)),
 };
 
 var failures = new List<string>();
@@ -1279,6 +1286,76 @@ static void Contains(string expected, string actual)
 
 static KeyId? Normalize(ushort scanCode, ushort virtualKey, RawKeyFlags flags = RawKeyFlags.None) =>
     KeyNormalizer.Normalize(new RawKeyEvent(scanCode, flags, virtualKey));
+
+// ============ 构建信息 ============
+
+static void ReleaseBuildShowsNumericVersion()
+{
+    var build = BuildInfo.FromRaw("1.3.4", "20261120-050240", "8986a94", "Clean", "Release");
+
+    Equal("1.3.4", build.DisplayVersion);
+    Equal("Release", build.BuildTypeText);
+    Equal("Release", build.BuildType.ToString());
+}
+
+static void DevelopmentBuildAppendsDevSuffix()
+{
+    var build = BuildInfo.FromRaw("1.3.4", "20261120-050240", "8986a94", "Clean", "Debug");
+
+    Equal("1.3.4-dev", build.DisplayVersion);
+    Equal("Development", build.BuildTypeText);
+    // 渠道标识与工作区状态无关：工作区干净也照样带 -dev。
+    Equal("Clean", build.GitStatusText);
+}
+
+static void DevSuffixIsIndependentOfGitStatus()
+{
+    var clean = BuildInfo.FromRaw("1.3.4", "20261120-050240", "8986a94", "Clean", "Development");
+    var modified = BuildInfo.FromRaw("1.3.4", "20261120-050241", "8986a94", "Modified", "Development");
+
+    Equal(clean.DisplayVersion, modified.DisplayVersion);
+    Equal("1.3.4-dev", modified.DisplayVersion);
+    Equal("Modified", modified.GitStatusText);
+}
+
+static void PrereleaseTagIsKept()
+{
+    // 版本号已经带预发布标识时原样保留，不重复追加 -dev，也不改成 -release。
+    Equal("1.4.0-alpha.1", BuildInfo.FromRaw("1.4.0-alpha.1", "20261120-050240", "8986a94", "Clean", "Development").DisplayVersion);
+    Equal("1.4.0-beta.2", BuildInfo.FromRaw("1.4.0-beta.2", "20261120-050240", "8986a94", "Clean", "Release").DisplayVersion);
+}
+
+static void MissingGitInfoIsDegraded()
+{
+    // 源码不在仓库里 / 构建机没有 Git：不抛异常，且不能把「拿不到」说成 Clean。
+    var build = BuildInfo.FromRaw("1.3.4", "20261120-050240", "unknown", "Unknown", "Release");
+
+    Equal(BuildInfo.UnknownValue, build.GitCommit);
+    Equal(GitWorkingTreeState.Unknown, build.GitStatus);
+    Equal("Unknown", build.GitStatusText);
+    Equal("1.3.4", build.DisplayVersion);
+}
+
+static void NonHashGitOutputFallsBackToUnknown()
+{
+    // git 失败时会把 "fatal: not a git repository" 打到输出里，这种文本不能写进程序。
+    var build = BuildInfo.FromRaw("1.3.4", "20261120-050240", "fatal: not a git repository", "Clean", "Release");
+
+    Equal(BuildInfo.UnknownValue, build.GitCommit);
+    Equal(GitWorkingTreeState.Unknown, build.GitStatus);
+}
+
+static void DiagnosticTextListsEveryField()
+{
+    var build = BuildInfo.FromRaw("1.3.4", "20261120-050240", "8986A94", "modified", "Release");
+    var text = build.ToDiagnosticText();
+
+    Contains("Version    : 1.3.4", text);
+    Contains("Build ID   : 20261120-050240", text);
+    Contains("Git Commit : 8986a94", text);
+    Contains("Git Status : Modified", text);
+    Contains("Build Type : Release", text);
+}
 
 static RawKeyEvent MakeA() => new(0x1E, RawKeyFlags.None, 0x41);
 static RawKeyEvent BreakA() => new(0x1E, RawKeyFlags.Break, 0x41);

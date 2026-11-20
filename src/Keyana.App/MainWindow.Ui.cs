@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using Keyana.App.Controls;
 using Keyana.App.Theme;
+using Keyana.Core;
 using Keyana.Storage;
 
 namespace Keyana.App;
@@ -36,6 +37,42 @@ public partial class MainWindow
         {
             _ = RefreshStorageUiAsync(force: true);
         }
+    }
+
+    /// <summary>
+    /// 把构建信息填进「关于」卡片右下角的辅助信息区。数值本身在构建时就固定了，
+    /// 这里只做展示映射：Git 不可用时给出明确说明，不让用户以为构建时工作区是干净的。
+    /// </summary>
+    private void ApplyBuildInfo(BuildInfo build)
+    {
+        BuildVersionValue.Text = build.Version;
+        BuildIdValue.Text = build.BuildId;
+        BuildCommitValue.Text = build.GitCommit;
+        BuildStatusValue.Text = build.GitStatusText;
+        BuildTypeValue.Text = build.BuildTypeText;
+
+        BuildCommitValue.ToolTip = build.GitCommit == BuildInfo.UnknownValue
+            ? "构建环境没有可用的 Git 信息（源码不在仓库中，或构建机未安装 Git）"
+            : $"Git HEAD {build.GitCommit}";
+        CopyBuildInfoButton.ToolTip = "复制完整构建信息";
+    }
+
+    private async void CopyBuildInfoButton_Click(object sender, RoutedEventArgs eventArgs)
+    {
+        try
+        {
+            Clipboard.SetText(BuildInfoProvider.Current.ToDiagnosticText());
+        }
+        catch (Exception exception)
+        {
+            // 剪贴板被其他进程占用时只记录，不打断用户操作。
+            ErrorLog.Record("Clipboard", exception);
+            return;
+        }
+
+        CopyBuildInfoButton.Content = "已复制";
+        await Task.Delay(1500);
+        CopyBuildInfoButton.Content = "复制";
     }
 
     private void PopulateFontFamilyChoices()

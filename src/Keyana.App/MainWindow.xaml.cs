@@ -75,9 +75,14 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        Title = $"Keyana v{AppInfo.Version} · 键盘与鼠标使用统计";
-        VersionText.Text = $"v{AppInfo.Version}";
-        AboutVersionText.Text = $"Keyana v{AppInfo.Version} · MIT License";
+        // 版本信息全部来自构建时写入的 BuildInfo：侧边栏沿用原来的「v + 版本号」写法，
+        // 只有渠道后缀由 DisplayVersion 决定（Release 不加、Development 带 -dev）；
+        // 「关于」区域另外展示 Build ID / Git 等完整信息。
+        var build = BuildInfoProvider.Current;
+        Title = $"Keyana v{build.DisplayVersion} · 键盘与鼠标使用统计";
+        VersionText.Text = $"v{build.DisplayVersion}";
+        AboutVersionText.Text = $"Keyana v{build.DisplayVersion} · MIT License";
+        ApplyBuildInfo(build);
 
         _startupRegistration = new StartupRegistrationService(
             Environment.ProcessPath ?? throw new InvalidOperationException("无法确定 Keyana 可执行文件路径。"));

@@ -65,6 +65,10 @@ public partial class App : System.Windows.Application
             return;
         }
 
+        // 只有真正要跑起来的主实例才记启动日志：被单实例机制挡掉的第二次启动、
+        // 以及开头就退出的提权 helper 都不写，避免日志被无意义的记录刷满。
+        StartupLog.RecordStartup(BuildInfoProvider.Current);
+
         _showSignal = CreateLocalEvent(ShowSignalName);
         _exitSignal = CreateLocalEvent(ExitSignalName);
         _mainWindow = new MainWindow();

@@ -767,7 +767,8 @@
                         </Border>
                     </Grid>
 
-                    <Border Grid.Row="2" Style="{StaticResource CardStyle}" Padding="20" Margin="0,14,0,0">
+                    <Border Grid.Row="2" Style="{StaticResource CardStyle}" Padding="20" Margin="0,14,0,0"
+                            x:Name="AboutCard">
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
@@ -778,8 +779,78 @@
                                 <TextBlock TextWrapping="Wrap" Style="{StaticResource BodySecondaryText}" Margin="0,6,0,0"
                                            Text="数据库只保存每一分钟内各按键或按钮的累计次数与滚轮刻度，不记录输入内容、输入顺序、正在使用的应用或鼠标位置；无需账号，不连接服务器。" />
                             </StackPanel>
-                            <TextBlock Grid.Column="1" x:Name="AboutVersionText" Style="{StaticResource CaptionText}"
-                                       VerticalAlignment="Bottom" Margin="20,0,0,0" />
+
+                            <!-- 构建信息：不新开页面或弹窗，作为「关于」区域的辅助信息贴在卡片右下角，
+                                 视觉层级低于上面的隐私说明与版本行。数值全部来自构建时写入的程序集。 -->
+                            <StackPanel Grid.Column="1" Margin="28,0,0,0"
+                                        VerticalAlignment="Bottom" HorizontalAlignment="Right">
+                                <TextBlock x:Name="AboutVersionText" Style="{StaticResource CaptionText}"
+                                           HorizontalAlignment="Right" />
+
+                                <Border Style="{StaticResource InnerTileStyle}" Padding="12,10"
+                                        Margin="0,10,0,0" HorizontalAlignment="Right"
+                                        x:Name="BuildInfoCard">
+                                    <StackPanel>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="构建信息" Style="{StaticResource BuildInfoLabelText}"
+                                                       VerticalAlignment="Center" />
+                                            <Button x:Name="CopyBuildInfoButton" Grid.Column="1" Content="复制"
+                                                    Style="{StaticResource GhostButtonStyle}"
+                                                    FontSize="{DynamicResource FontSizeCaption}"
+                                                    Padding="8,2" Margin="12,0,0,0" Focusable="False"
+                                                    Click="CopyBuildInfoButton_Click" />
+                                        </Grid>
+
+                                        <Grid Margin="0,7,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+
+                                            <TextBlock Text="Version" Style="{StaticResource BuildInfoLabelText}"
+                                                       Margin="0,0,16,3" />
+                                            <TextBlock x:Name="BuildVersionValue" Grid.Column="1"
+                                                       Style="{StaticResource BuildInfoValueText}"
+                                                       HorizontalAlignment="Right" Margin="0,0,0,3" />
+
+                                            <TextBlock Grid.Row="1" Text="Build ID" Style="{StaticResource BuildInfoLabelText}"
+                                                       Margin="0,0,16,3" />
+                                            <TextBlock x:Name="BuildIdValue" Grid.Row="1" Grid.Column="1"
+                                                       Style="{StaticResource BuildInfoValueText}"
+                                                       HorizontalAlignment="Right" Margin="0,0,0,3" />
+
+                                            <TextBlock Grid.Row="2" Text="Git Commit" Style="{StaticResource BuildInfoLabelText}"
+                                                       Margin="0,0,16,3" />
+                                            <TextBlock x:Name="BuildCommitValue" Grid.Row="2" Grid.Column="1"
+                                                       Style="{StaticResource BuildInfoValueText}"
+                                                       HorizontalAlignment="Right" Margin="0,0,0,3" />
+
+                                            <TextBlock Grid.Row="3" Text="Git Status" Style="{StaticResource BuildInfoLabelText}"
+                                                       Margin="0,0,16,3" />
+                                            <TextBlock x:Name="BuildStatusValue" Grid.Row="3" Grid.Column="1"
+                                                       Style="{StaticResource BuildInfoValueText}"
+                                                       HorizontalAlignment="Right" Margin="0,0,0,3" />
+
+                                            <TextBlock Grid.Row="4" Text="Build Type" Style="{StaticResource BuildInfoLabelText}"
+                                                       Margin="0,0,16,0" />
+                                            <TextBlock x:Name="BuildTypeValue" Grid.Row="4" Grid.Column="1"
+                                                       Style="{StaticResource BuildInfoValueText}"
+                                                       HorizontalAlignment="Right" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
                         </Grid>
                     </Border>
                 </Grid>

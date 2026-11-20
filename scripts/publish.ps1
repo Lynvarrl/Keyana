@@ -113,7 +113,9 @@ function Assert-ZipEntries {
 
 # 版本号只在 csproj 的 <Version> 里维护，这里读回来给产物命名，
 # 避免出现「exe 是 1.2.0、压缩包名还是 1.1.1」这种不一致。
-[xml]$projectXml = Get-Content -LiteralPath $projectPath
+# 必须显式按 UTF-8 读：csproj 是无 BOM 的 UTF-8，Windows PowerShell 5.1 默认按
+# 系统 ANSI 代码页解码，中文注释会被拆成乱码，严重时连属性里的引号都被吃掉。
+[xml]$projectXml = Get-Content -LiteralPath $projectPath -Encoding UTF8
 $version = ($projectXml.Project.PropertyGroup | Where-Object { $_.Version } | Select-Object -First 1).Version
 if ([string]::IsNullOrWhiteSpace($version)) {
     throw "无法从 $projectPath 读取 <Version>；发布脚本需要它来命名产物。"
