@@ -468,6 +468,9 @@ public partial class MainWindow
         RangeTotalLabel.Text = _overviewFilter is null ? "所选范围总输入" : "已筛选 · 总输入";
         RangeTotalHintText.Text = _selectedRange is { } range ? FormatRangeShort(range) : "—";
 
+        // 配列说明跟着数据走：换区间后「哪些没画出来的键有输入」可能变化。
+        LayoutHintText.Text = DescribeLayout(HeatmapKeyboard.Layout, sourceCounts);
+
         var mouseTotal = checked(
             counts[(int)KeyId.MouseLeftButton] +
             counts[(int)KeyId.MouseRightButton] +

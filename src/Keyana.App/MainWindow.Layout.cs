@@ -78,7 +78,7 @@ public partial class MainWindow
     {
         HeatmapKeyboard.SetLayout(layout);
         RenderHeatmap(_counter.GetSnapshot().PressedKeys);
-        LayoutHintText.Text = DescribeLayout(layout);
+        LayoutHintText.Text = DescribeLayout(layout, _selectedRawCounts);
 
         // 下拉框要跟着走：从设置恢复、导入后自动切换，都要反映到界面上。
         _layoutUiUpdating = true;
@@ -101,22 +101,30 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// 配列说明。紧凑配列会少画一些键（60% 没有功能键行、方向键和数字键盘），
-    /// 这里把「少了多少」直接写出来，并说明它们仍在排行榜里，避免被当成数据丢失。
-    /// 鼠标按键总是画在键盘下方，不计入「未显示」。
+    /// 配列说明。只说「这套配列没画出来、但你确实有输入」的键——
+    /// 按「一共少画了多少键」报数没有意义：104 也不会画 F13-F24、浏览器键和多媒体键，
+    /// 那样每套配列都会挂一句警告。鼠标按键总画在键盘下方，不参与计算。
     /// </summary>
-    private static string DescribeLayout(KeyLayout layout)
+    private static string DescribeLayout(KeyLayout layout, IReadOnlyList<ulong> counts)
     {
-        var keyboardKeyCount = KeyCatalog.Definitions
-            .Where(definition => !HeatBasis.IsMouseKey(definition.Id))
-            .Count();
-        var shown = layout.KeyIds
-            .Where(id => !HeatBasis.IsMouseKey(id))
-            .Count();
-        var hidden = keyboardKeyCount - shown;
-        return hidden <= 0
-            ? $"{layout.Name} · 全部键位已显示"
-            : $"{layout.Name} · 未显示 {hidden} 个键（仍可在排行榜与全部键位里查看）";
+        var hiddenWithData = 0;
+        foreach (var definition in KeyCatalog.Definitions)
+        {
+            if (HeatBasis.IsMouseKey(definition.Id) || layout.KeyIds.Contains(definition.Id))
+            {
+                continue;
+            }
+
+            var index = (int)definition.Id;
+            if (index < counts.Count && counts[index] > 0)
+            {
+                hiddenWithData++;
+            }
+        }
+
+        return hiddenWithData == 0
+            ? layout.Name
+            : $"{layout.Name} · {hiddenWithData} 个未显示的键有输入（仍可在排行榜查看）";
     }
 
     private void UpdateLayoutPathText()
