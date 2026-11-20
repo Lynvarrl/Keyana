@@ -49,7 +49,7 @@ public partial class MainWindow
             AnalysisRangePicker.SetRangeUtc(range.StartUtc, range.EndUtc);
         }
 
-        AnalysisRangeHintText.Text = $"{FormatRangeShort(range)} · 独立于概览页";
+        UpdateAnalysisHint();
     }
 
     private async Task<(long StartUtc, long EndUtc)> ResolveAnalysisPresetRangeAsync(TimeRangePreset preset)
@@ -87,8 +87,23 @@ public partial class MainWindow
         _analysisPreset = TimeRangePreset.Custom;
         AnalysisRangePicker.SetRangeUtc(range.StartUtc, range.EndUtc);
         ClearAnalysisPresetChips();
-        AnalysisRangeHintText.Text = $"{FormatRangeShort(range)} · 独立于概览页";
+        UpdateAnalysisHint();
         await RefreshAnalysisAsync(force: true);
+    }
+
+    /// <summary>
+    /// 分析页的副标题：区间 + 「独立于概览页」。
+    /// 筛选状态不写在这里：这一行右侧紧挨着范围 chip，再塞一段会被省略号截断；
+    /// 筛选标记放在「按键筛选」按钮和区间总输入的副标题上更清楚。
+    /// </summary>
+    private void UpdateAnalysisHint()
+    {
+        if (_analysisRange is not { } range)
+        {
+            return;
+        }
+
+        AnalysisRangeHintText.Text = $"{FormatRangeShort(range)} · 独立于概览页";
     }
 
     private void ClearAnalysisPresetChips()
@@ -157,24 +172,34 @@ public partial class MainWindow
                 TimeZoneInfo.Local,
                 _lifetimeCancellation.Token);
 
-            var counts = aggregate.Counts;
-            var total = aggregate.TotalCount;
+            // 原始计数留给筛选面板显示每个键的真实次数，展示与指标用过滤后的副本。
+            _analysisRawCounts = aggregate.Counts;
+            var visibleCounts = KeyFilter.Visible(aggregate.Counts, _analysisFilter) ?? aggregate.Counts;
+            var total = visibleCounts.Aggregate(0UL, (sum, count) => checked(sum + count));
 
             AnalysisTotalText.Text = total.ToString("N0");
-            AnalysisAverageText.Text = daily.DayCount == 0 ? "0" : daily.AveragePerDay.ToString("N0");
+            // 有筛选时日均按「筛选后总量 ÷ 自然日数」算：活跃天数与使用时长仍取未筛选口径，
+            // 这是筛选只作用于输入量的必然结果，提示行里也标了「已筛选」。
+            AnalysisAverageText.Text = daily.DayCount == 0
+                ? "0"
+                : (total / (double)daily.DayCount).ToString("N0");
+            AnalysisTotalHintText.Text = _analysisFilter is null
+                ? "含键盘、鼠标按键与滚轮"
+                : $"已筛选 · {total:N0} 次";
             AnalysisActiveDaysText.Text = daily.ActiveDays.ToString("N0");
             _analysisActiveMinutes = daily.TotalActiveMinutes;
             UpdateDurationTexts();
 
-            RankingList.ItemsSource = BuildRankingRows(counts, total);
+            RankingList.ItemsSource = BuildRankingRows(visibleCounts, total);
             RankingEmptyText.Visibility = total == 0 ? Visibility.Visible : Visibility.Collapsed;
-            CategoryShare.SetData(BuildCategorySlices(counts));
+            CategoryShare.SetData(BuildCategorySlices(visibleCounts));
             AnalysisDailyStrip.SetPalette(_currentPalette);
             AnalysisDailyStrip.SetData(
                 daily.Days.Count > MaxActivityBars
                     ? daily.Days.Skip(daily.Days.Count - MaxActivityBars).ToArray()
                     : daily.Days);
             _lastAnalysisUiRefresh = DateTimeOffset.UtcNow;
+            UpdateAnalysisHint();
         }
         catch (OperationCanceledException) when (_isClosing)
         {

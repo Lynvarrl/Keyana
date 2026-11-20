@@ -63,6 +63,12 @@ public partial class MainWindow : Window
     private bool _syncingAnalysisPresetChips;
     private ulong[] _selectedCounts = new ulong[KeyCatalog.Count];
     private ulong[] _selectedStoredCounts = new ulong[KeyCatalog.Count];
+    // 未经筛选的展示计数：筛选面板要用它显示每个键的真实次数。
+    private ulong[] _selectedRawCounts = new ulong[KeyCatalog.Count];
+    private ulong[] _analysisRawCounts = new ulong[KeyCatalog.Count];
+    // 概览与分析各自独立筛选，只靠「同步到另一页」互相复制；null 表示未筛选。
+    private IReadOnlySet<KeyId>? _overviewFilter;
+    private IReadOnlySet<KeyId>? _analysisFilter;
     private ulong[] _selectedDisplayTimeCounts = new ulong[TenMinuteTimelineControl.SegmentCount];
     private ulong[] _selectedStoredTimeCounts = new ulong[TenMinuteTimelineControl.SegmentCount];
     private uint[]? _lastLiveCounts;
@@ -125,6 +131,14 @@ public partial class MainWindow : Window
         ActivityStrip.SetPalette(_currentPalette);
         AnalysisDailyStrip.SetPalette(_currentPalette);
         UpdateGradientBar();
+
+        // 两个筛选面板共用一个控件，但状态各存在自己页面上；同步按钮是唯一的跨页通道。
+        OverviewFilterPanel.SyncTarget = "同步到分析页";
+        AnalysisFilterPanel.SyncTarget = "同步到概览页";
+        OverviewFilterPanel.FilterChanged += (_, _) => ApplyOverviewFilter();
+        AnalysisFilterPanel.FilterChanged += (_, _) => ApplyAnalysisFilter();
+        OverviewFilterPanel.SyncRequested += (_, _) => SyncFilter(overviewToAnalysis: true);
+        AnalysisFilterPanel.SyncRequested += (_, _) => SyncFilter(overviewToAnalysis: false);
 
         _uiReady = true;
 

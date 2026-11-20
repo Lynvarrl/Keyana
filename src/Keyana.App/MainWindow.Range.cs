@@ -453,13 +453,19 @@ public partial class MainWindow
         return true;
     }
 
-    private void ApplySelectedCounts(ulong[] counts, ulong[] timeCounts)
+    private void ApplySelectedCounts(ulong[] sourceCounts, ulong[] timeCounts)
     {
+        // 原始计数留给筛选面板显示「每个键实际有多少次」；展示用过滤后的副本。
+        _selectedRawCounts = sourceCounts;
+        var counts = KeyFilter.Visible(sourceCounts, _overviewFilter) ?? sourceCounts;
         _selectedCounts = counts;
         _selectedDisplayTimeCounts = timeCounts;
         var totalCount = counts.Aggregate(0UL, (sum, count) => checked(sum + count));
         HeatmapTotalText.Text = $"所选范围总计：{totalCount:N0}";
         RangeTotalText.Text = totalCount.ToString("N0");
+        // 指标卡只有一列宽，塞不下「区间 + 已筛选」两段话（会被省略号截掉），
+        // 所以筛选标记放在标签上，副标题仍然只写区间。
+        RangeTotalLabel.Text = _overviewFilter is null ? "所选范围总输入" : "已筛选 · 总输入";
         RangeTotalHintText.Text = _selectedRange is { } range ? FormatRangeShort(range) : "—";
 
         var mouseTotal = checked(

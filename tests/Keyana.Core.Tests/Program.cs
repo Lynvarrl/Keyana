@@ -71,6 +71,8 @@ var tests = new (string Name, Func<Task> Run)[]
     ("鼠标着色基准只看鼠标按键", Sync(MouseBasisIgnoresKeyboard)),
     ("合计着色基准取全局最大键", Sync(CombinedBasisUsesGlobalMaximum)),
     ("着色基准解析失败时降级", Sync(ColorBasisParseFallsBack)),
+    ("未筛选时直接复用原计数", Sync(KeyFilterWithoutSelectionReusesCounts)),
+    ("筛选只保留选中键的计数", Sync(KeyFilterKeepsOnlySelectedKeys)),
 };
 
 var failures = new List<string>();
@@ -1396,6 +1398,33 @@ static void ColorBasisParseFallsBack()
     Equal(ColorBasis.MouseOnly, HeatBasis.Parse("mouseonly", ColorBasis.KeyboardOnly));
     Equal(ColorBasis.KeyboardOnly, HeatBasis.Parse("彩虹色", ColorBasis.KeyboardOnly));
     Equal(ColorBasis.KeyboardAndMouse, HeatBasis.Parse(null, ColorBasis.KeyboardAndMouse));
+}
+
+static void KeyFilterWithoutSelectionReusesCounts()
+{
+    var counts = MakeMixedCounts();
+    Equal(true, ReferenceEquals(null, KeyFilter.Visible(counts, null)));
+    // 空集合等于「什么都不统计」，没有意义，按未筛选处理。
+    Equal(true, ReferenceEquals(null, KeyFilter.Visible(counts, new HashSet<KeyId>())));
+    Equal("全部按键", KeyFilter.Describe(null));
+}
+
+static void KeyFilterKeepsOnlySelectedKeys()
+{
+    var counts = MakeMixedCounts();
+    var visible = KeyFilter.Visible(counts, new HashSet<KeyId> { KeyId.Digit1, KeyId.MouseLeftButton })
+                  ?? throw new InvalidOperationException("有选中键时必须返回副本。");
+
+    Equal(100UL, visible[(int)KeyId.Digit1]);
+    Equal(800UL, visible[(int)KeyId.MouseLeftButton]);
+    Equal(0UL, visible[(int)KeyId.Digit2]);
+    // 原数组不能被改动：取消筛选要能立刻恢复。
+    Equal(50UL, counts[(int)KeyId.Digit2]);
+
+    // 筛选后最亮键只在选中范围内取，键盘口径自然变成「选中键里的最大值」。
+    Equal(100UL, HeatBasis.Denominator(visible, ColorBasis.KeyboardOnly));
+    Equal(800UL, HeatBasis.Denominator(visible, ColorBasis.KeyboardAndMouse));
+    Equal("已筛选 2 个键", KeyFilter.Describe(new HashSet<KeyId> { KeyId.Digit1, KeyId.MouseLeftButton }));
 }
 
 static ulong[] MakeMixedCounts()

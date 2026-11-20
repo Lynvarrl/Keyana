@@ -51,7 +51,9 @@ function Assert-PublishOutput {
         throw "$Label 产物没有文件版本信息。"
     }
 
-    $expected = [Version]$version
+    # 版本号允许带预发布后缀（如 1.3.5-dev）：后缀只用于命名与界面显示，
+    # FileVersion 里没有它，所以比较时只取数字前缀。
+    $expected = [Version](($version -split '-', 2)[0])
     $actual = [Version]$fileVersion
     if ($actual.Major -ne $expected.Major -or
         $actual.Minor -ne $expected.Minor -or

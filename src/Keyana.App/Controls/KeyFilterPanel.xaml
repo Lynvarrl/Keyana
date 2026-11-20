@@ -1,0 +1,103 @@
+<UserControl x:Class="Keyana.App.Controls.KeyFilterPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False">
+    <!-- 面板本身不带定位：宿主把它放进自己的 Popup 里，两个页面各用一个实例，
+         筛选状态互不影响（概览与分析各自独立，需要时用「同步」按钮互相复制）。 -->
+    <Border Background="{DynamicResource CardBackgroundBrush}"
+            BorderBrush="{DynamicResource CardBorderStrongBrush}"
+            BorderThickness="1" CornerRadius="12" Padding="12" Width="330">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="按键筛选" Style="{StaticResource SectionTitleText}" VerticalAlignment="Center" />
+                <TextBlock x:Name="SummaryText" Grid.Column="1" Style="{StaticResource CaptionText}"
+                           VerticalAlignment="Center" Text="全部按键" />
+            </Grid>
+
+            <Grid Grid.Row="1" Margin="0,10,0,6">
+                <TextBox x:Name="SearchBox" Padding="8,6" TextChanged="SearchBox_TextChanged"
+                         ToolTip="按名称搜索，例如 shift、滚轮、f1" />
+                <TextBlock x:Name="SearchHint" Text="搜索按键" Margin="10,0,0,0" IsHitTestVisible="False"
+                           VerticalAlignment="Center" Foreground="{DynamicResource TertiaryTextBrush}"
+                           FontSize="{DynamicResource FontSizeSmall}" />
+            </Grid>
+
+            <ListBox x:Name="KeyList" Grid.Row="2" Height="318" Background="Transparent"
+                     BorderThickness="0" Padding="0" Margin="0,0,2,0"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="Focusable" Value="False" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <Border Background="Transparent" Padding="2,0">
+                                        <ContentPresenter HorizontalAlignment="Stretch" />
+                                    </Border>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}" Padding="4,1"
+                                  FontSize="{DynamicResource FontSizeSmall}"
+                                  HorizontalContentAlignment="Stretch">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="164" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis"
+                                           VerticalAlignment="Center" />
+                                <TextBlock Grid.Column="1" Text="{Binding CountText}"
+                                           Foreground="{DynamicResource TertiaryTextBrush}"
+                                           FontSize="{DynamicResource FontSizeCaption}"
+                                           VerticalAlignment="Center" Margin="8,0,4,0" />
+                            </Grid>
+                        </CheckBox>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+                <ListBox.GroupStyle>
+                    <GroupStyle>
+                        <GroupStyle.HeaderTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" Style="{StaticResource CaptionText}"
+                                           FontWeight="SemiBold" Margin="4,8,0,4" />
+                            </DataTemplate>
+                        </GroupStyle.HeaderTemplate>
+                    </GroupStyle>
+                </ListBox.GroupStyle>
+            </ListBox>
+
+            <StackPanel Grid.Row="3" Margin="0,10,0,0">
+                <StackPanel Orientation="Horizontal">
+                    <Button Content="全选" Style="{StaticResource GhostButtonStyle}" Padding="10,5"
+                            Focusable="False" Click="SelectAllButton_Click" />
+                    <Button Content="清空" Style="{StaticResource GhostButtonStyle}" Padding="10,5"
+                            Margin="4,0,0,0" Focusable="False" Click="ClearAllButton_Click" />
+                    <Button x:Name="ResetButton" Content="取消筛选" Style="{StaticResource GhostButtonStyle}"
+                            Padding="10,5" Margin="4,0,0,0" Focusable="False" Click="ResetButton_Click" />
+                </StackPanel>
+                <Button x:Name="SyncButton" Content="同步到另一页" Style="{StaticResource SecondaryButtonStyle}"
+                        Padding="10,6" Margin="0,8,0,0" HorizontalAlignment="Stretch" Focusable="False"
+                        Click="SyncButton_Click" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</UserControl>

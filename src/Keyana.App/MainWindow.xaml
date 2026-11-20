@@ -143,6 +143,15 @@
                                 <RadioButton x:Name="PresetChipCustom" Content="自定义" Tag="Custom" GroupName="RangePreset"
                                              Style="{StaticResource ChipStyle}" Checked="PresetChip_Checked"
                                              Click="CustomChip_Click" />
+                                <Button x:Name="OverviewFilterButton" Content="按键筛选" Tag=""
+                                        Style="{StaticResource FilterChipButtonStyle}"
+                                        Focusable="False" Click="OverviewFilterButton_Click" />
+                                <Popup x:Name="OverviewFilterPopup"
+                                       PlacementTarget="{Binding ElementName=OverviewFilterButton}"
+                                       Placement="Bottom" VerticalOffset="6" StaysOpen="False"
+                                       AllowsTransparency="True" PopupAnimation="Fade">
+                                    <controls:KeyFilterPanel x:Name="OverviewFilterPanel" />
+                                </Popup>
                             </WrapPanel>
 
                             <Grid Grid.Row="1" Margin="0,12,0,0">
@@ -168,7 +177,7 @@
                     <UniformGrid Grid.Row="2" Columns="5" Margin="0,14,-10,0">
                         <Border Style="{StaticResource CardStyle}" Padding="16,14" Margin="0,0,10,0">
                             <StackPanel>
-                                <TextBlock Text="所选范围总输入" Style="{StaticResource MetricLabelText}" />
+                                <TextBlock x:Name="RangeTotalLabel" Text="所选范围总输入" Style="{StaticResource MetricLabelText}" />
                                 <TextBlock x:Name="RangeTotalText" Text="0" Style="{StaticResource MetricValueText}" Margin="0,4,0,0" />
                                 <TextBlock x:Name="RangeTotalHintText" Text="—" Style="{StaticResource CaptionText}"
                                            Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
@@ -452,6 +461,15 @@
                             <controls:DateRangePicker x:Name="AnalysisRangePicker"
                                                       Margin="8,0,0,0"
                                                       RangeApplied="AnalysisRangePicker_RangeApplied" />
+                            <Button x:Name="AnalysisFilterButton" Content="按键筛选" Tag=""
+                                    Style="{StaticResource FilterChipButtonStyle}" Margin="8,0,0,0"
+                                    Focusable="False" Click="AnalysisFilterButton_Click" />
+                            <Popup x:Name="AnalysisFilterPopup"
+                                   PlacementTarget="{Binding ElementName=AnalysisFilterButton}"
+                                   Placement="Bottom" VerticalOffset="6" StaysOpen="False"
+                                   AllowsTransparency="True" PopupAnimation="Fade">
+                                <controls:KeyFilterPanel x:Name="AnalysisFilterPanel" />
+                            </Popup>
                         </StackPanel>
                     </Grid>
 
@@ -460,7 +478,7 @@
                             <StackPanel>
                                 <TextBlock Text="区间总输入" Style="{StaticResource MetricLabelText}" />
                                 <TextBlock x:Name="AnalysisTotalText" Text="0" Style="{StaticResource MetricValueText}" Margin="0,4,0,0" />
-                                <TextBlock Text="含键盘、鼠标按键与滚轮" Style="{StaticResource CaptionText}" Margin="0,2,0,0" />
+                                <TextBlock x:Name="AnalysisTotalHintText" Text="含键盘、鼠标按键与滚轮" Style="{StaticResource CaptionText}" Margin="0,2,0,0" />
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource CardStyle}" Padding="16,14" Margin="0,0,10,0">
