@@ -10,9 +10,13 @@ public static class CountVectorCodec
 
     /// <summary>
     /// 当前写入的键位表版本。v2 加入鼠标左右键，v3 加入滚轮上下，v4 加入鼠标中键，
-    /// v5 加入鼠标侧键。只追加枚举成员、不重排，旧版本的数据仍按下标正确解码。
+    /// v5 加入鼠标侧键，v6 加入滚轮手势上下。只追加枚举成员、不重排，旧版本的数据
+    /// 仍按下标正确解码（新键位读到 0）。
+    ///
+    /// v6 之后 <see cref="Keyana.Core.KeyId.MouseWheelUp"/>/<c>Down</c> 不再累计次数，
+    /// 只作为历史距离的落点存在；滚轮的新计数走 <c>WheelGestureUp</c>/<c>Down</c>。
     /// </summary>
-    public const int KeyMapVersion = 5;
+    public const int KeyMapVersion = 6;
     private const int HeaderSize = 3;
     private const int EntrySize = 6;
 

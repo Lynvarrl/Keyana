@@ -34,4 +34,9 @@ public enum KeyId
     MouseWheelUp, MouseWheelDown,
     MouseMiddleButton,
     MouseXButton1, MouseXButton2,
+
+    // 滚轮手势动作数：与上面的 MouseWheelUp/Down（滚动距离）是两套独立指标。
+    // 距离按原始 delta 单独入库，不进计数向量；这两个键只在判定出「一次新的
+    // 上滑 / 下滑动作」时记 1 次。
+    WheelGestureUp, WheelGestureDown,
 }

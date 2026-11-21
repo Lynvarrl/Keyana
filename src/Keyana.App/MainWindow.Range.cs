@@ -185,6 +185,10 @@ public partial class MainWindow
 
             _selectedStoredCounts = storedCounts;
             _selectedStoredTimeCounts = storedTimeCounts;
+            // 距离与次数分开取：次数走十分钟汇总拼装，距离只能逐分钟求和，
+            // 而且必须按同一条「实时分钟不重复计」的切分方式来查。
+            _selectedStoredWheelDistance = await QueryStoredWheelDistanceAsync(range, liveSnapshot);
+            SetLiveWheelDistance(liveSnapshot);
             var displayCounts = (ulong[])storedCounts.Clone();
             var displayTimeCounts = (ulong[])storedTimeCounts.Clone();
             if (liveSnapshot is not null && _selectedLiveBucketStart == liveSnapshot.BucketStartUtc)
@@ -438,26 +442,41 @@ public partial class MainWindow
             return false;
         }
 
-        if (liveSnapshot.BucketStartUtc < range.StartUtc || liveSnapshot.BucketStartUtc >= range.EndUtc ||
-            (_lastLiveCounts is not null && _lastLiveCounts.AsSpan().SequenceEqual(liveSnapshot.Counts)))
+        if (liveSnapshot.BucketStartUtc < range.StartUtc || liveSnapshot.BucketStartUtc >= range.EndUtc)
+        {
+            return false;
+        }
+
+        // 手势只看计数，距离却每滚一下就变：只要距离变了就得重算展示，
+        // 但只有计数变了才需要重画热力图。两条变化分开判断。
+        var countsChanged = _lastLiveCounts is null ||
+                            !_lastLiveCounts.AsSpan().SequenceEqual(liveSnapshot.Counts);
+        var liveDistance = new WheelDistanceTotals(
+            liveSnapshot.WheelDistanceUp,
+            liveSnapshot.WheelDistanceDown);
+        var distanceChanged = liveDistance != _lastLiveWheelDistance;
+        if (!countsChanged && !distanceChanged)
         {
             return false;
         }
 
         _lastLiveCounts = (uint[])liveSnapshot.Counts.Clone();
+        _lastLiveWheelDistance = liveDistance;
         var displayCounts = (ulong[])_selectedStoredCounts.Clone();
         var displayTimeCounts = (ulong[])_selectedStoredTimeCounts.Clone();
         AddCounts(displayCounts, liveSnapshot.Counts);
         AddLiveTimeCount(displayTimeCounts, liveSnapshot);
         ApplySelectedCounts(displayCounts, displayTimeCounts);
-        return true;
+        return countsChanged;
     }
 
     private void ApplySelectedCounts(ulong[] sourceCounts, ulong[] timeCounts)
     {
         // 原始计数留给筛选面板显示「每个键实际有多少次」；展示用过滤后的副本。
-        _selectedRawCounts = sourceCounts;
-        var counts = KeyFilter.Visible(sourceCounts, _overviewFilter) ?? sourceCounts;
+        // 距离键在这里就清掉：它们承载的是「滚动格数」，不是次数。
+        _selectedLegacyWheelDistance = LegacyWheelDistance(sourceCounts);
+        _selectedRawCounts = WithoutWheelDistance(sourceCounts);
+        var counts = WithoutWheelDistance(KeyFilter.Visible(sourceCounts, _overviewFilter) ?? sourceCounts);
         _selectedCounts = counts;
         _selectedDisplayTimeCounts = timeCounts;
         var totalCount = counts.Aggregate(0UL, (sum, count) => checked(sum + count));
@@ -477,12 +496,15 @@ public partial class MainWindow
             counts[(int)KeyId.MouseMiddleButton] +
             counts[(int)KeyId.MouseXButton1] +
             counts[(int)KeyId.MouseXButton2] +
-            counts[(int)KeyId.MouseWheelUp] +
-            counts[(int)KeyId.MouseWheelDown]);
+            // 手势动作是鼠标动作，算进「鼠标输入」；距离不是次数，不参与。
+            counts[(int)KeyId.WheelGestureUp] +
+            counts[(int)KeyId.WheelGestureDown]);
         MouseTotalText.Text = mouseTotal.ToString("N0");
         MouseShareText.Text = totalCount == 0
             ? "—"
             : $"{mouseTotal * 100d / totalCount:F1}%";
+
+        UpdateWheelMetricsDisplay();
 
         foreach (var row in _rows)
         {
@@ -515,6 +537,50 @@ public partial class MainWindow
         var localTime = DateTimeOffset.FromUnixTimeSeconds(snapshot.BucketStartUtc).ToLocalTime();
         var index = (localTime.Hour * 6) + (localTime.Minute / 10);
         destination[index] = checked(destination[index] + (ulong)snapshot.TotalCount);
+    }
+
+    /// <summary>
+    /// 查已落盘的滚轮距离。当前这一分钟可能已经被 30 秒自动保存写进库里，
+    /// 所以必须和计数一样把它排除在外，再由调用方加上内存里的实时值——
+    /// 否则「刚滚完就刷新」会让这一分钟算两遍。
+    /// </summary>
+    private async Task<WheelDistanceTotals> QueryStoredWheelDistanceAsync(
+        (long StartUtc, long EndUtc) range,
+        MinuteBucketSnapshot? liveSnapshot)
+    {
+        if (_repository is null)
+        {
+            return default;
+        }
+
+        if (liveSnapshot is not { } live ||
+            live.BucketStartUtc < range.StartUtc || live.BucketStartUtc >= range.EndUtc)
+        {
+            return await _repository.QueryWheelDistanceAsync(
+                range.StartUtc,
+                range.EndUtc,
+                _lifetimeCancellation.Token);
+        }
+
+        var total = default(WheelDistanceTotals);
+        if (range.StartUtc < live.BucketStartUtc)
+        {
+            total += await _repository.QueryWheelDistanceAsync(
+                range.StartUtc,
+                live.BucketStartUtc,
+                _lifetimeCancellation.Token);
+        }
+
+        var after = live.BucketStartUtc + TimeBuckets.MinuteSeconds;
+        if (after < range.EndUtc)
+        {
+            total += await _repository.QueryWheelDistanceAsync(
+                after,
+                range.EndUtc,
+                _lifetimeCancellation.Token);
+        }
+
+        return total;
     }
 
     private async Task AccumulateStoredRangeAsync(long startUtc, long endUtc, ulong[] destination)

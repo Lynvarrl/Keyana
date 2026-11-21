@@ -45,6 +45,9 @@ public sealed class StatisticsRecorder : IAsyncDisposable
     private readonly Task _timerWorker;
     private long _currentMinuteStart;
     private uint[] _currentCounts;
+    /// <summary>当前分钟累计的原始滚动 delta。与次数同桶、同 revision、同一次写入。</summary>
+    private long _currentDistanceUp;
+    private long _currentDistanceDown;
     private long _revisionSeed;
     private long _lastSavedUnixSeconds;
     private string? _lastError;
@@ -62,6 +65,8 @@ public sealed class StatisticsRecorder : IAsyncDisposable
         _flushInterval = flushInterval;
         _currentMinuteStart = initialBucket.BucketStartUtc;
         _currentCounts = (uint[])initialBucket.Counts.Clone();
+        _currentDistanceUp = initialBucket.WheelDistanceUp;
+        _currentDistanceDown = initialBucket.WheelDistanceDown;
 
         // 容量 1 + DropWrite：并发触发时只保留一个「有活干」的信号，不堆积。
         _workSignal = Channel.CreateBounded<byte>(new BoundedChannelOptions(1)
@@ -120,16 +125,7 @@ public sealed class StatisticsRecorder : IAsyncDisposable
                 return false;
             }
 
-            var minuteStart = TimeBuckets.ToMinuteStart(_clock.UtcNow);
-
-            // 只在时间前进时切桶。时钟被回拨时继续累计当前桶：若按旧实现切到过去的
-            // 分钟，会用「绝对覆盖」把已经写进历史的那一分钟改小。
-            if (minuteStart > _currentMinuteStart)
-            {
-                staged = TryStageCurrentLocked();
-                _currentMinuteStart = minuteStart;
-                _currentCounts = new uint[KeyCatalog.Count];
-            }
+            staged = RollBucketLocked();
 
             var keyIndex = (int)keyId;
             if (_currentCounts[keyIndex] < uint.MaxValue)
@@ -146,11 +142,60 @@ public sealed class StatisticsRecorder : IAsyncDisposable
         return true;
     }
 
+    /// <summary>
+    /// 累加原始滚动距离。与 <see cref="RecordKeyPress"/> 共用同一分钟桶、同一 revision，
+    /// 因此距离和次数一定同生同灭：不会出现「次数写进去了、距离还在内存里」的半份快照。
+    ///
+    /// 距离是 int64 累加：单分钟收到 1 亿 delta 才需要担心溢出，实际上连 uint32 都用不满。
+    /// 这里不做任何压缩、封顶或对数映射——忠实采集是这条路线的全部意义。
+    /// </summary>
+    /// <param name="up">true 向上滚，false 向下滚。</param>
+    /// <param name="delta">原始增量；按绝对值累加，正负由 <paramref name="up"/> 表达。</param>
+    public bool RecordWheelDistance(bool up, long delta)
+    {
+        var magnitude = delta < 0 ? -delta : delta;
+        if (magnitude == 0)
+        {
+            return true;
+        }
+
+        var staged = false;
+        lock (_gate)
+        {
+            if (_state != LifecycleState.Accepting)
+            {
+                return false;
+            }
+
+            staged = RollBucketLocked();
+
+            if (up)
+            {
+                _currentDistanceUp = checked(_currentDistanceUp + magnitude);
+            }
+            else
+            {
+                _currentDistanceDown = checked(_currentDistanceDown + magnitude);
+            }
+        }
+
+        if (staged)
+        {
+            SignalWorker();
+        }
+
+        return true;
+    }
+
     public MinuteBucketSnapshot GetCurrentSnapshot()
     {
         lock (_gate)
         {
-            return new MinuteBucketSnapshot(_currentMinuteStart, (uint[])_currentCounts.Clone());
+            return new MinuteBucketSnapshot(
+                _currentMinuteStart,
+                (uint[])_currentCounts.Clone(),
+                _currentDistanceUp,
+                _currentDistanceDown);
         }
     }
 
@@ -215,8 +260,8 @@ public sealed class StatisticsRecorder : IAsyncDisposable
                 return;
             }
 
-            // 先关门再取快照：此后 RecordKeyPress 一律返回 false，不会再有「接受了
-            // 却进不了这次 flush」的输入。
+            // 先关门再取快照：此后 RecordKeyPress / RecordWheelDistance 一律返回 false，
+            // 不会再有「接受了却进不了这次 flush」的输入。
             _state = LifecycleState.Draining;
             TryStageCurrentLocked();
         }
@@ -308,7 +353,11 @@ public sealed class StatisticsRecorder : IAsyncDisposable
                 }
             }
 
-            var snapshot = new MinuteBucketSnapshot(bucketStart, bucket.Counts);
+            var snapshot = new MinuteBucketSnapshot(
+                bucketStart,
+                bucket.Counts,
+                bucket.DistanceUp,
+                bucket.DistanceDown);
             Exception? failure = null;
             for (var attempt = 1; attempt <= AttemptsPerDrain; attempt++)
             {
@@ -370,6 +419,28 @@ public sealed class StatisticsRecorder : IAsyncDisposable
     }
 
     /// <summary>
+    /// 只在时间前进时切桶。时钟被回拨时继续累计当前桶：若按旧实现切到过去的
+    /// 分钟，会用「绝对覆盖」把已经写进历史的那一分钟改小。
+    ///
+    /// 返回 true 表示旧桶进了待写表，调用方需要唤醒保存线程。
+    /// </summary>
+    private bool RollBucketLocked()
+    {
+        var minuteStart = TimeBuckets.ToMinuteStart(_clock.UtcNow);
+        if (minuteStart <= _currentMinuteStart)
+        {
+            return false;
+        }
+
+        var staged = TryStageCurrentLocked();
+        _currentMinuteStart = minuteStart;
+        _currentCounts = new uint[KeyCatalog.Count];
+        _currentDistanceUp = 0;
+        _currentDistanceDown = 0;
+        return staged;
+    }
+
+    /// <summary>
     /// 把当前分钟的计数放进待写表。内容与已有待写快照完全一致时不重复入队，
     /// 只返回已有 revision，让调用方等待那次写入即可。
     /// </summary>
@@ -383,20 +454,27 @@ public sealed class StatisticsRecorder : IAsyncDisposable
         bucketStart = _currentMinuteStart;
         revision = 0;
 
-        if (CountTotal(_currentCounts) == 0)
+        // 只有距离、没有次数的一分钟也是有效数据（纯滚动、没敲键），不能当成空桶丢掉。
+        if (CountTotal(_currentCounts) == 0 && _currentDistanceUp == 0 && _currentDistanceDown == 0)
         {
             return false;
         }
 
         if (_pending.TryGetValue(bucketStart, out var existing) &&
-            existing.Counts.AsSpan().SequenceEqual(_currentCounts))
+            existing.Counts.AsSpan().SequenceEqual(_currentCounts) &&
+            existing.DistanceUp == _currentDistanceUp &&
+            existing.DistanceDown == _currentDistanceDown)
         {
             revision = existing.Revision;
             return true;
         }
 
         revision = ++_revisionSeed;
-        _pending[bucketStart] = new PendingBucket((uint[])_currentCounts.Clone(), revision);
+        _pending[bucketStart] = new PendingBucket(
+            (uint[])_currentCounts.Clone(),
+            _currentDistanceUp,
+            _currentDistanceDown,
+            revision);
         return true;
     }
 
@@ -477,9 +555,13 @@ public sealed class StatisticsRecorder : IAsyncDisposable
         Completed,
     }
 
-    private sealed class PendingBucket(uint[] counts, long revision)
+    private sealed class PendingBucket(uint[] counts, long distanceUp, long distanceDown, long revision)
     {
         public uint[] Counts { get; } = counts;
+
+        public long DistanceUp { get; } = distanceUp;
+
+        public long DistanceDown { get; } = distanceDown;
 
         public long Revision { get; } = revision;
     }

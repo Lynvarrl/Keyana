@@ -187,6 +187,9 @@ public static class KeyShortLabel
         KeyId.MouseXButton2 => "侧键2",
         KeyId.MouseWheelUp => "滚轮↑",
         KeyId.MouseWheelDown => "滚轮↓",
+        // 手势键画在鼠标一行里，标签要能跟着键帽宽度走：两个字比「滚轮↑」更合适。
+        KeyId.WheelGestureUp => "上滑",
+        KeyId.WheelGestureDown => "下滑",
         // A-Z、0-9、F1-F24、数字键盘数字：名称本身就是最短标签。
         _ => KeyCatalog.Get(id).DisplayName.Replace("数字键盘 ", string.Empty, StringComparison.Ordinal),
     };

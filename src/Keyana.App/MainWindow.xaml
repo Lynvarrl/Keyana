@@ -354,6 +354,21 @@
                                 <TextBlock Text="占全部输入" Style="{StaticResource CaptionText}" Margin="0,14,0,0" />
                                 <TextBlock x:Name="MouseShareText" Text="0%" FontSize="{DynamicResource FontSizeTitle}"
                                            FontWeight="SemiBold" Margin="0,3,0,0" />
+
+                                <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,16" />
+
+                                <!-- 滚轮的两个独立指标：距离是「让屏幕走了多远」，手势是「做了几次
+                                     上滑 / 下滑动作」。两者可逆性不同（距离能从原始值重算，手势不行），
+                                     所以并排放，不要合成一个数字。 -->
+                                <TextBlock Text="滚轮距离" Style="{StaticResource CaptionText}" />
+                                <TextBlock x:Name="WheelDistanceText" Text="0 格" FontWeight="SemiBold"
+                                           FontSize="{DynamicResource FontSizeSubtitle}" Margin="0,3,0,0" />
+                                <TextBlock x:Name="WheelDistanceEstimateText" Text="≈ 0 cm · 估算"
+                                           Style="{StaticResource CaptionText}" Margin="0,2,0,0" TextWrapping="Wrap" />
+
+                                <TextBlock Text="滑动手势" Style="{StaticResource CaptionText}" Margin="0,12,0,0" />
+                                <TextBlock x:Name="WheelGestureText" Text="上滑 0 · 下滑 0" FontWeight="SemiBold"
+                                           FontSize="{DynamicResource FontSizeSubtitle}" Margin="0,3,0,0" />
                             </StackPanel>
                         </Border>
 
@@ -492,7 +507,7 @@
                             <StackPanel>
                                 <TextBlock Text="区间总输入" Style="{StaticResource MetricLabelText}" />
                                 <TextBlock x:Name="AnalysisTotalText" Text="0" Style="{StaticResource MetricValueText}" Margin="0,4,0,0" />
-                                <TextBlock x:Name="AnalysisTotalHintText" Text="含键盘、鼠标按键与滚轮" Style="{StaticResource CaptionText}" Margin="0,2,0,0" />
+                                <TextBlock x:Name="AnalysisTotalHintText" Text="含键盘、鼠标按键与滚轮手势" Style="{StaticResource CaptionText}" Margin="0,2,0,0" />
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource CardStyle}" Padding="16,14" Margin="0,0,10,0">
@@ -579,8 +594,41 @@
                             <Border Style="{StaticResource CardStyle}" Padding="18,16">
                                 <StackPanel>
                                     <TextBlock Text="类别占比" Style="{StaticResource CardTitleText}" />
-                                    <TextBlock Text="按键、鼠标与滚轮的输入构成" Style="{StaticResource CaptionText}" Margin="0,3,0,0" />
+                                    <TextBlock Text="按键、鼠标与滚轮手势的输入构成" Style="{StaticResource CaptionText}" Margin="0,3,0,0" />
                                     <controls:CategoryShareControl x:Name="CategoryShare" Margin="0,12,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- 滚轮拆成两个指标后单独给一张卡：距离不是次数，混进排行榜与占比
+                                 会把「一滑几百格」重新带回来。 -->
+                            <Border Style="{StaticResource CardStyle}" Padding="18,16" Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="滚轮：距离与手势" Style="{StaticResource CardTitleText}" />
+                                    <TextBlock Text="距离是累计滚动量（一格 = 120），手势是一次上滑 / 下滑动作"
+                                               Style="{StaticResource CaptionText}" Margin="0,3,0,0" TextWrapping="Wrap" />
+                                    <Grid Margin="0,12,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel>
+                                            <TextBlock Text="滚动距离" Style="{StaticResource CaptionText}" />
+                                            <TextBlock x:Name="AnalysisWheelDistanceText" Text="0 格"
+                                                       FontWeight="SemiBold" FontSize="{DynamicResource FontSizeSubtitle}"
+                                                       Margin="0,3,0,0" />
+                                            <TextBlock x:Name="AnalysisWheelEstimateText" Text="≈ 0 cm · 估算"
+                                                       Style="{StaticResource CaptionText}" Margin="0,2,0,0"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="1">
+                                            <TextBlock Text="滑动手势" Style="{StaticResource CaptionText}" />
+                                            <TextBlock x:Name="AnalysisWheelGestureText" Text="上滑 0 · 下滑 0"
+                                                       FontWeight="SemiBold" FontSize="{DynamicResource FontSizeSubtitle}"
+                                                       Margin="0,3,0,0" />
+                                            <TextBlock Text="上 / 下分别计次" Style="{StaticResource CaptionText}"
+                                                       Margin="0,2,0,0" />
+                                        </StackPanel>
+                                    </Grid>
                                 </StackPanel>
                             </Border>
 
@@ -644,6 +692,7 @@
                 <!-- ============ 设置 ============ -->
                 <Grid x:Name="SettingsPage" Visibility="Collapsed">
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
@@ -834,7 +883,17 @@
                         </Border>
                     </Grid>
 
-                    <Border Grid.Row="2" Style="{StaticResource CardStyle}" Padding="20" Margin="0,14,0,0"
+                    <!-- 滚轮：距离与手势是两套指标，手势窗口更适合按自己的设备现场调。 -->
+                    <Border Grid.Row="2" Style="{StaticResource CardStyle}" Padding="20" Margin="0,14,0,0">
+                        <StackPanel>
+                            <TextBlock Text="滚轮采集与校准" Style="{StaticResource CardTitleText}" />
+                            <TextBlock TextWrapping="Wrap" Style="{StaticResource CaptionText}" Margin="0,3,0,0"
+                                       Text="两个指标同时记：滚动距离忠实保存原始 delta，滑动手势按静默窗口计数。窗口合不合手只能自己试——滚一下，看右侧判定成了几次动作。" />
+                            <controls:WheelCalibrationPanel x:Name="WheelPanel" Margin="0,16,0,0" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Grid.Row="3" Style="{StaticResource CardStyle}" Padding="20" Margin="0,14,0,0"
                             x:Name="AboutCard">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -844,7 +903,7 @@
                             <StackPanel>
                                 <TextBlock Text="隐私与数据格式" Style="{StaticResource CardTitleText}" />
                                 <TextBlock TextWrapping="Wrap" Style="{StaticResource BodySecondaryText}" Margin="0,6,0,0"
-                                           Text="数据库只保存每一分钟内各按键或按钮的累计次数与滚轮刻度，不记录输入内容、输入顺序、正在使用的应用或鼠标位置；无需账号，不连接服务器。" />
+                                           Text="数据库只保存每一分钟内各按键或按钮的累计次数、滚轮滚动距离与滑动手势次数，不记录输入内容、输入顺序、正在使用的应用或鼠标位置；无需账号，不连接服务器。" />
                             </StackPanel>
 
                             <!-- 构建信息：不新开页面或弹窗，作为「关于」区域的辅助信息贴在卡片右下角，

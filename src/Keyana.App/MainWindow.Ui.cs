@@ -145,6 +145,14 @@ public partial class MainWindow
             SnapCheckBox.IsChecked = settings.SnapToTenMinutes;
             SelectFontFamily(settings.FontFamily);
             SelectFontScale(settings.FontScale);
+            // 滚轮两处：窗口值要回填到滑块（保存后热更新走同一条路径），距离系数只影响估算。
+            WheelPanel.SetWindowMs(settings.WheelGestureWindowMs);
+            WheelPanel.SetDpiScale(settings.WheelDpiScale);
+            if (_rawInput is not null)
+            {
+                // 存储重试初始化时采集器可能已经在跑：把读回来的窗口值补推一次。
+                _rawInput.WheelGestureWindowMs = settings.WheelGestureWindowMs;
+            }
         }
         finally
         {

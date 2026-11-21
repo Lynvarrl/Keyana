@@ -30,7 +30,8 @@ public static class HeatBasis
     public static bool IsMouseKey(KeyId id) => id is
         KeyId.MouseLeftButton or KeyId.MouseRightButton or KeyId.MouseMiddleButton or
         KeyId.MouseXButton1 or KeyId.MouseXButton2 or
-        KeyId.MouseWheelUp or KeyId.MouseWheelDown;
+        KeyId.MouseWheelUp or KeyId.MouseWheelDown or
+        KeyId.WheelGestureUp or KeyId.WheelGestureDown;
 
     /// <summary>按基准取分母：所涉范围内最大的单键计数。全为 0 时返回 0。</summary>
     public static ulong Denominator(IReadOnlyList<ulong> counts, ColorBasis basis)

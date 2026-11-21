@@ -38,6 +38,19 @@ public sealed class AppSettings
     /// </summary>
     public string KeyboardLayoutId { get; set; } = "ansi-104";
 
+    /// <summary>
+    /// 滚轮手势窗口（毫秒）：距同向上一次滚动超过这个静默时长，才算一次新的上滑 / 下滑动作。
+    /// 运行时热更新，只影响改动之后的新事件——判定发生在采集那一刻，历史不会重算。
+    /// </summary>
+    public int WheelGestureWindowMs { get; set; } = WheelGestureDetector.DefaultWindowMs;
+
+    /// <summary>
+    /// 距离换算系数，只用于把滚动距离估算成「厘米 / 米」这类直观长度。
+    /// 默认按「一格 3 行、每行 20 DIP」折算；系统缩放不参与（DIP 与 DPI 无关），
+    /// 这个系数只用来修正「每次滚几行」的设置差异。任何情况下都不写回存储。
+    /// </summary>
+    public double WheelDpiScale { get; set; } = 1.0;
+
     public void Validate()
     {
         if (Version != 1)
@@ -80,6 +93,18 @@ public sealed class AppSettings
             : KeyboardLayoutId.Trim();
 
         FontFamily = string.IsNullOrWhiteSpace(FontFamily) ? string.Empty : FontFamily.Trim();
+
+        // 滚轮的界面参数同样允许被手工改坏：越界就是「界面字段坏了」，回默认值而不是
+        // 硬钳到边界 —— 钳到 50 或 500 会让人以为自己是这么设的。
+        if (WheelGestureWindowMs is < WheelGestureDetector.MinWindowMs or > WheelGestureDetector.MaxWindowMs)
+        {
+            WheelGestureWindowMs = WheelGestureDetector.DefaultWindowMs;
+        }
+
+        if (!double.IsFinite(WheelDpiScale) || WheelDpiScale is < 0.1 or > 10)
+        {
+            WheelDpiScale = 1.0;
+        }
     }
 }
 

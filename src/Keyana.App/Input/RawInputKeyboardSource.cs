@@ -32,18 +32,37 @@ public sealed class RawInputKeyboardSource : IDisposable
 
     private readonly KeyboardCounter _counter;
     private readonly Action<KeyId>? _countedKeySink;
+    private readonly Action<WheelInputInfo>? _rawWheelSink;
+    private readonly Action<WheelInputInfo>? _wheelDistanceSink;
+    private readonly WheelGestureDetector _wheelDetector = new();
     private readonly HwndSource _windowSource;
     private readonly Timer _systemShortcutTimer;
     private readonly object _systemShortcutGate = new();
-    private readonly Dictionary<nint, WheelAccumulator> _wheelAccumulators = [];
     private int _unrecognizedMakeCount;
+    private int _wheelGestureWindowMs = WheelGestureDetector.DefaultWindowMs;
+    private int _wheelBypass;
     private bool _sampledAltTabDown;
     private volatile bool _disposed;
 
-    public RawInputKeyboardSource(nint windowHandle, KeyboardCounter counter, Action<KeyId>? countedKeySink = null)
+    /// <param name="countedKeySink">已计数的一次输入（用于实时高亮）。</param>
+    /// <param name="rawWheelSink">
+    /// 每条真实滚轮事件的旁路观测。无论是否计数、是否处于校准模式都会触发，
+    /// 校准面板靠它显示原始事件；不要在这里改统计状态。
+    /// </param>
+    /// <param name="wheelDistanceSink">
+    /// 需要入库的滚动距离。暂停与校准旁路期间不触发。
+    /// </param>
+    public RawInputKeyboardSource(
+        nint windowHandle,
+        KeyboardCounter counter,
+        Action<KeyId>? countedKeySink = null,
+        Action<WheelInputInfo>? rawWheelSink = null,
+        Action<WheelInputInfo>? wheelDistanceSink = null)
     {
         _counter = counter;
         _countedKeySink = countedKeySink;
+        _rawWheelSink = rawWheelSink;
+        _wheelDistanceSink = wheelDistanceSink;
         _windowSource = HwndSource.FromHwnd(windowHandle)
             ?? throw new InvalidOperationException("无法连接窗口消息源。");
 
@@ -85,6 +104,26 @@ public sealed class RawInputKeyboardSource : IDisposable
     public int UnrecognizedMakeCount => Volatile.Read(ref _unrecognizedMakeCount);
 
     public string? LastUnrecognizedDescription { get; private set; }
+
+    /// <summary>手势窗口（毫秒），热更新：只影响改动之后的新事件。</summary>
+    public int WheelGestureWindowMs
+    {
+        get => Volatile.Read(ref _wheelGestureWindowMs);
+        set => Volatile.Write(ref _wheelGestureWindowMs, WheelGestureDetector.ClampWindow(value));
+    }
+
+    /// <summary>
+    /// 校准旁路：为 true 时滚轮事件仍然照常被观测与判定（面板要显示判定结果），
+    /// 但不写入计数、不累加距离。其它键鼠完全不受影响。
+    /// </summary>
+    public bool WheelBypass
+    {
+        get => Volatile.Read(ref _wheelBypass) != 0;
+        set => Volatile.Write(ref _wheelBypass, value ? 1 : 0);
+    }
+
+    /// <summary>清空手势判定状态。暂停恢复、校准开关切换、清空诊断时调用。</summary>
+    public void ResetWheelState() => _wheelDetector.Reset();
 
     public void ReconcileSystemShortcutState()
     {
@@ -172,7 +211,7 @@ public sealed class RawInputKeyboardSource : IDisposable
         Interlocked.Exchange(ref _unrecognizedMakeCount, 0);
         LastInputDescription = "等待键盘输入…";
         LastUnrecognizedDescription = null;
-        _wheelAccumulators.Clear();
+        _wheelDetector.Reset();
     }
 
     private nint WindowProcedure(nint hwnd, int message, nint wParam, nint lParam, ref bool handled)
@@ -184,7 +223,8 @@ public sealed class RawInputKeyboardSource : IDisposable
         else if (message == WmInputDeviceChange && wParam == GidcRemoval)
         {
             _counter.RemoveDevice(lParam);
-            _wheelAccumulators.Remove(lParam);
+            // 只清这台设备：另一台鼠标正在进行的滚动不该被打断。
+            _wheelDetector.Reset(lParam);
         }
 
         // 保持 handled=false，让 WPF/DefWindowProc 完成 WM_INPUT 的系统清理。
@@ -264,8 +304,17 @@ public sealed class RawInputKeyboardSource : IDisposable
     }
 
     /// <summary>
-    /// 滚轮没有按下 / 松开语义：一条消息里可能带多格，高精度滚轮又会拆成小于 120 的增量。
-    /// 因此按设备累计余数，凑满一格记一次脉冲；上下方向分别计入不同键位。
+    /// 滚轮没有按下 / 松开语义，一次动作会拆成很多条消息（高精度滚轮与触控板尤其碎）。
+    ///
+    /// 这里同时走两套互相独立的指标：
+    /// <list type="bullet">
+    /// <item><b>距离</b>——原始 delta 直接交给存储层按分钟累加，满 30 秒随桶落库。
+    /// 不做 120 折算、不做封顶：上层想怎么解读都能从原始值算回来；</item>
+    /// <item><b>手势动作数</b>——由 <see cref="WheelGestureDetector"/> 按静默窗口判定，
+    /// 只有「距上次同向滚动超过窗口」才记 1 次。这一步不可逆，必须当场判定。</item>
+    /// </list>
+    ///
+    /// 判定始终执行（校准面板要显示结果），旁路与暂停只挡住副作用。
     /// </summary>
     private void ProcessMouseWheel(nint deviceHandle, RawMouse mouse)
     {
@@ -274,31 +323,42 @@ public sealed class RawInputKeyboardSource : IDisposable
             return;
         }
 
-        if (!_wheelAccumulators.TryGetValue(deviceHandle, out var accumulator))
-        {
-            accumulator = new WheelAccumulator();
-            _wheelAccumulators[deviceHandle] = accumulator;
-        }
-
-        var notches = accumulator.Add(mouse.WheelDelta);
-        if (notches == 0)
+        var delta = mouse.WheelDelta;
+        var gesture = _wheelDetector.Observe(
+            deviceHandle,
+            delta,
+            Environment.TickCount64,
+            WheelGestureWindowMs);
+        if (!gesture.Accepted)
         {
             return;
         }
 
-        var keyId = notches > 0 ? KeyId.MouseWheelUp : KeyId.MouseWheelDown;
-        var magnitude = Math.Abs(notches);
-        for (var notch = 0; notch < magnitude; notch++)
+        var isUp = gesture.Direction == WheelDirection.Up;
+        var info = new WheelInputInfo(delta, gesture.Direction, gesture.IsNewGesture);
+
+        // 旁路永远先发：校准面板看到的是真实事件，与是否入库无关。
+        _rawWheelSink?.Invoke(info);
+
+        if (!WheelBypass && !_counter.IsPaused)
         {
-            if (_counter.RecordImpulse(keyId).Counted)
+            _wheelDistanceSink?.Invoke(info);
+
+            if (gesture.IsNewGesture)
             {
-                _countedKeySink?.Invoke(keyId);
+                var keyId = isUp ? KeyId.WheelGestureUp : KeyId.WheelGestureDown;
+                if (_counter.RecordImpulse(keyId).Counted)
+                {
+                    _countedKeySink?.Invoke(keyId);
+                }
             }
         }
 
-        LastInputDescription = magnitude == 1
-            ? $"最近识别：{KeyCatalog.Get(keyId).DisplayName}"
-            : $"最近识别：{KeyCatalog.Get(keyId).DisplayName} × {magnitude}";
+        var directionName = isUp ? "滚轮上滑" : "滚轮下滑";
+        var distance = $"距离 {(isUp ? "+" : "−")}{WheelMetrics.Magnitude(delta):N0}";
+        LastInputDescription = gesture.IsNewGesture
+            ? $"最近识别：{directionName}（手势） · {distance}"
+            : $"最近识别：{directionName} · {distance}（并入本次手势）";
     }
 
     private void ProcessMouseButton(

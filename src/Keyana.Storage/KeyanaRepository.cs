@@ -7,16 +7,26 @@ namespace Keyana.Storage;
 
 public sealed class KeyanaRepository : IDisposable, IMinuteBucketStore
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     /// <summary>
     /// 版本 n-1 → n 的增量 DDL 清单。新增版本时在这里追加一条
-    /// <c>(目标版本, 增量 DDL)</c>，例如 <c>(2, "ALTER TABLE minute_buckets ADD COLUMN ...;")</c>。
+    /// <c>(目标版本, 增量 DDL)</c>。
     ///
     /// 不要修改已有条目：它们的职责是把老库升到当年的版本，改动会让已经升过级的
-    /// 数据库对不上。当前 schema 只到版本 1，因此清单为空。
+    /// 数据库对不上。
+    ///
+    /// v2：滚轮距离从「按格折算的次数」里拆出来，单独两列存原始 delta。
+    /// 历史行的两列为 0、旧的格数仍留在 counts 里，不回填、不改写——
+    /// 旧数据的口径是历史事实，没有可靠办法还原成真实 delta。
     /// </summary>
-    private static readonly (int TargetVersion, string Sql)[] SchemaMigrations = [];
+    private static readonly (int TargetVersion, string Sql)[] SchemaMigrations =
+    [
+        (2, """
+            ALTER TABLE minute_buckets ADD COLUMN wheel_distance_up INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE minute_buckets ADD COLUMN wheel_distance_down INTEGER NOT NULL DEFAULT 0;
+            """),
+    ];
 
     private readonly string _connectionString;
 
@@ -129,7 +139,7 @@ public sealed class KeyanaRepository : IDisposable, IMinuteBucketStore
         await using var connection = await OpenConnectionAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT keymap_version, counts
+            SELECT keymap_version, counts, wheel_distance_up, wheel_distance_down
             FROM minute_buckets
             WHERE bucket_start_utc = $start;
             """;
@@ -142,7 +152,11 @@ public sealed class KeyanaRepository : IDisposable, IMinuteBucketStore
         }
 
         ValidateKeyMapVersion(reader.GetInt32(0));
-        return new MinuteBucketSnapshot(bucketStartUtc, CountVectorCodec.Decode((byte[])reader[1]));
+        return new MinuteBucketSnapshot(
+            bucketStartUtc,
+            CountVectorCodec.Decode((byte[])reader[1]),
+            reader.GetInt64(2),
+            reader.GetInt64(3));
     }
 
     public async Task UpsertMinuteBucketAsync(
@@ -158,18 +172,23 @@ public sealed class KeyanaRepository : IDisposable, IMinuteBucketStore
             command.Transaction = transaction;
             command.CommandText = """
                 INSERT INTO minute_buckets (
-                    bucket_start_utc, keymap_version, counts, total_count, updated_at_utc)
-                VALUES ($start, $keymap, $counts, $total, $updated)
+                    bucket_start_utc, keymap_version, counts, total_count,
+                    wheel_distance_up, wheel_distance_down, updated_at_utc)
+                VALUES ($start, $keymap, $counts, $total, $distanceUp, $distanceDown, $updated)
                 ON CONFLICT(bucket_start_utc) DO UPDATE SET
                     keymap_version = excluded.keymap_version,
                     counts = excluded.counts,
                     total_count = excluded.total_count,
+                    wheel_distance_up = excluded.wheel_distance_up,
+                    wheel_distance_down = excluded.wheel_distance_down,
                     updated_at_utc = excluded.updated_at_utc;
                 """;
             command.Parameters.AddWithValue("$start", snapshot.BucketStartUtc);
             command.Parameters.AddWithValue("$keymap", CountVectorCodec.KeyMapVersion);
             command.Parameters.AddWithValue("$counts", CountVectorCodec.Encode(snapshot.Counts));
             command.Parameters.AddWithValue("$total", snapshot.TotalCount);
+            command.Parameters.AddWithValue("$distanceUp", snapshot.WheelDistanceUp);
+            command.Parameters.AddWithValue("$distanceDown", snapshot.WheelDistanceDown);
             command.Parameters.AddWithValue("$updated", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             await command.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -220,6 +239,38 @@ public sealed class KeyanaRepository : IDisposable, IMinuteBucketStore
         await transaction.CommitAsync(cancellationToken);
 
         return new StatisticsAggregate(startUtc, endUtc, totals);
+    }
+
+    /// <summary>
+    /// 汇总一个区间内的滚轮原始距离。
+    ///
+    /// 只扫分钟表，不走十分钟汇总：<c>rollup_10m</c> 是给时段分布用的派生表，只存次数，
+    /// 没有距离列。距离的语义是「累计走了多远」，逐分钟求和是唯一正确的算法，
+    /// 汇总表能省的那点 IO 不值得再维护一套并行的距离聚合。
+    /// </summary>
+    public async Task<WheelDistanceTotals> QueryWheelDistanceAsync(
+        long startUtc,
+        long endUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRange(startUtc, endUtc);
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT COALESCE(SUM(wheel_distance_up), 0), COALESCE(SUM(wheel_distance_down), 0)
+            FROM minute_buckets
+            WHERE bucket_start_utc >= $start AND bucket_start_utc < $end;
+            """;
+        command.Parameters.AddWithValue("$start", startUtc);
+        command.Parameters.AddWithValue("$end", endUtc);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return default;
+        }
+
+        return new WheelDistanceTotals(reader.GetInt64(0), reader.GetInt64(1));
     }
 
     public async Task<StoredDataRange?> GetDataRangeAsync(CancellationToken cancellationToken = default)

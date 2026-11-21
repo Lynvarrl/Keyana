@@ -173,9 +173,12 @@ public partial class MainWindow
                 _lifetimeCancellation.Token);
 
             // 原始计数留给筛选面板显示每个键的真实次数，展示与指标用过滤后的副本。
-            _analysisRawCounts = aggregate.Counts;
+            _analysisRawCounts = WithoutWheelDistance(aggregate.Counts);
             var visibleCounts = KeyFilter.Visible(aggregate.Counts, _analysisFilter) ?? aggregate.Counts;
-            var total = visibleCounts.Aggregate(0UL, (sum, count) => checked(sum + count));
+            // 滚轮距离键承载的是格数，不是次数：从这里开始就排除，
+            // 排行榜、类别占比、总输入与日均一律不把它当「输入次数」。
+            var counted = WithoutWheelDistance(visibleCounts);
+            var total = counted.Aggregate(0UL, (sum, count) => checked(sum + count));
 
             AnalysisTotalText.Text = total.ToString("N0");
             // 有筛选时日均按「筛选后总量 ÷ 自然日数」算：活跃天数与使用时长仍取未筛选口径，
@@ -184,15 +187,23 @@ public partial class MainWindow
                 ? "0"
                 : (total / (double)daily.DayCount).ToString("N0");
             AnalysisTotalHintText.Text = _analysisFilter is null
-                ? "含键盘、鼠标按键与滚轮"
+                ? "含键盘、鼠标按键与滚轮手势"
                 : $"已筛选 · {total:N0} 次";
             AnalysisActiveDaysText.Text = daily.ActiveDays.ToString("N0");
             _analysisActiveMinutes = daily.TotalActiveMinutes;
             UpdateDurationTexts();
 
-            RankingList.ItemsSource = BuildRankingRows(visibleCounts, total);
+            RankingList.ItemsSource = BuildRankingRows(counted, total);
             RankingEmptyText.Visibility = total == 0 ? Visibility.Visible : Visibility.Collapsed;
-            CategoryShare.SetData(BuildCategorySlices(visibleCounts));
+            CategoryShare.SetData(BuildCategorySlices(counted));
+            var wheelDistance = await _repository.QueryWheelDistanceAsync(
+                range.StartUtc,
+                range.EndUtc,
+                _lifetimeCancellation.Token);
+            // 旧行只有格数：折回距离一并展示，避免历史区间显示成 0。
+            UpdateAnalysisWheelMetrics(
+                wheelDistance + LegacyWheelDistance(aggregate.Counts),
+                counted);
             AnalysisDailyStrip.SetPalette(_currentPalette);
             AnalysisDailyStrip.SetData(
                 daily.Days.Count > MaxActivityBars

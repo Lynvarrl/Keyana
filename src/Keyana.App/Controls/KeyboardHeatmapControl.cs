@@ -198,7 +198,11 @@ public sealed class KeyboardHeatmapControl : Viewbox
     }
 
     /// <summary>
-    /// 鼠标一行：左 / 中 / 右、侧键 1 / 2、滚轮上 / 下，样式与键帽完全一致。
+    /// 鼠标一行：左 / 中 / 右、侧键 1 / 2、上滑 / 下滑，样式与键帽完全一致。
+    ///
+    /// 滚轮两格画的是「手势次数」而不是「滚动距离」：整张热力图的语义是次数，
+    /// 距离混进来会把这一格染成最亮，还会诱导人拿它和按键次数比大小。
+    /// 距离在「鼠标与滚轮」卡片里单独展示。
     ///
     /// 不画鼠标轮廓：数据只有 7 个按钮，形状本身不承载信息，反而会把卡片撑高；
     /// 用同样的键帽排一行，颜色、悬停提示、按下高亮都自动与键盘保持一致。
@@ -223,7 +227,7 @@ public sealed class KeyboardHeatmapControl : Viewbox
                  {
                      KeyId.MouseLeftButton, KeyId.MouseMiddleButton, KeyId.MouseRightButton,
                      KeyId.MouseXButton1, KeyId.MouseXButton2,
-                     KeyId.MouseWheelUp, KeyId.MouseWheelDown,
+                     KeyId.WheelGestureUp, KeyId.WheelGestureDown,
                  })
         {
             Add(canvas, id, KeyShortLabel.For(id), x, y, mouseWidth);

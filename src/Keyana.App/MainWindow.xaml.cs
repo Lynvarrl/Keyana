@@ -142,6 +142,8 @@ public partial class MainWindow : Window
         OverviewFilterPanel.SyncRequested += (_, _) => SyncFilter(overviewToAnalysis: true);
         AnalysisFilterPanel.SyncRequested += (_, _) => SyncFilter(overviewToAnalysis: false);
 
+        InitializeWheelUi();
+
         _uiReady = true;
 
         _refreshTimer = new DispatcherTimer(DispatcherPriority.Background)
@@ -234,7 +236,11 @@ public partial class MainWindow : Window
                 _rawInput = new RawInputKeyboardSource(
                     windowHandle,
                     _counter,
-                    keyId => _recorder?.RecordKeyPress(keyId));
+                    keyId => _recorder?.RecordKeyPress(keyId),
+                    rawWheelSink: OnRawWheelObserved,
+                    wheelDistanceSink: OnWheelDistanceObserved);
+                _rawInput.WheelGestureWindowMs = _settings?.WheelGestureWindowMs
+                    ?? WheelGestureDetector.DefaultWindowMs;
             }
 
             UpdateRefreshTimers();
@@ -338,6 +344,9 @@ public partial class MainWindow : Window
     private void SetPaused(bool shouldPause)
     {
         _counter.SetPaused(shouldPause);
+        // 暂停期间滚轮事件不进统计，但手势判定器仍在观察：不清掉时间戳，
+        // 恢复后的第一下会被判成「上一次的续接」而丢一次动作。
+        _rawInput?.ResetWheelState();
         _trayIcon?.SetPaused(shouldPause);
         PauseButton.Content = shouldPause ? "恢复采集" : "暂停采集";
         _statusMode = shouldPause ? StatusMode.Paused : StatusMode.Collecting;
@@ -953,6 +962,7 @@ public partial class MainWindow : Window
     {
         _refreshTimer.Stop();
         _maintenanceTimer.Stop();
+        _wheelSettingsSaveTimer.Stop();
         ThemeManager.ThemeChanged -= OnThemeChanged;
         _trayIcon?.Dispose();
         _trayIcon = null;

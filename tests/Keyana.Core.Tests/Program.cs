@@ -56,8 +56,18 @@ var tests = new (string Name, Func<Task> Run)[]
     ("午夜发生夏令时跳变时仍能算出当天起点", Sync(MidnightDstTransitionUsesFirstValidInstant)),
     ("区间名称统一用「日」", Sync(RangeLabelsUseDayCharacter)),
     ("「全部」区间名称带出实际天数", Sync(AllRangeLabelCarriesDayCount)),
-    ("滚轮增量按 120 单位累计成刻度", Sync(WheelAccumulatesToNotches)),
-    ("滚轮脉冲可连续计数且不进入按下状态", Sync(WheelImpulseCountsRepeatedly)),
+    ("滚轮手势窗口内的连续滚动只算一次", Sync(WheelGestureMergesWithinWindow)),
+    ("滚轮手势上下方向各自独立计时", Sync(WheelDirectionsTimeIndependently)),
+    ("滚轮零增量不计数也不推进时间", Sync(WheelZeroDeltaIsIgnored)),
+    ("滚轮手势 Reset 后重新计数", Sync(WheelResetStartsFreshGesture)),
+    ("暂停期间滚轮手势不计数", Sync(WheelGestureNotCountedWhilePaused)),
+    ("滚轮距离与手势判定互不干扰", Sync(WheelDistanceAndGestureAreIndependent)),
+    ("滚轮距离按 120 折算并估算长度", Sync(WheelDistanceConvertsToNotchesAndCentimeters)),
+    ("手势脉冲可连续计数且不进入按下状态", Sync(WheelImpulseCountsRepeatedly)),
+    ("键位表 v6 可往返且旧数据新键位为 0", Sync(CountVectorV6RoundTrips)),
+    ("滚轮距离随分钟桶一起落库", WheelDistanceStagesWithMinuteBucketAsync),
+    ("数据库 v1 升级到 v2 保留旧数据", SchemaV1UpgradesToV2Async),
+    ("滚轮设置坏值时降级为默认", Sync(WheelSettingsFallBackToDefaults)),
     ("逐日汇总识别活跃日、火热日与逐小时分布", DailyUsageMarksActiveAndFireDaysAsync),
     ("界面设置损坏时降级为默认值", UiSettingsFallBackToDefaultsAsync),
     ("Release 构建只显示数字版本号", Sync(ReleaseBuildShowsNumericVersion)),
@@ -1154,31 +1164,387 @@ static void YesterdayRangeCoversWholeLocalDay()
     Equal(today.StartUtc, yesterday.EndUtc);
 }
 
-static void WheelAccumulatesToNotches()
+/// <summary>
+/// 按采集层的真实顺序喂事件：判定器 -> 新手势才记一次脉冲。
+/// 返回本次调用新记的次数。距离由调用方另算，两者在实现里就是互不依赖的。
+/// </summary>
+static int FeedWheel(
+    KeyboardCounter counter,
+    WheelGestureDetector detector,
+    nint deviceHandle,
+    int windowMs,
+    params (int Delta, long Ticks)[] events)
 {
-    var accumulator = new WheelAccumulator();
-    Equal(0, accumulator.Add(60));
-    Equal(1, accumulator.Add(60));
-    Equal(0, accumulator.Add(119));
-    Equal(1, accumulator.Add(1));
-    Equal(-1, accumulator.Add(-120));
-    Equal(0, accumulator.Add(-30));
-    Equal(-1, accumulator.Add(-90));
+    var counted = 0;
+    foreach (var (delta, ticks) in events)
+    {
+        var result = detector.Observe(deviceHandle, delta, ticks, windowMs);
+        if (!result.Accepted || !result.IsNewGesture)
+        {
+            continue;
+        }
+
+        var keyId = result.Direction == WheelDirection.Up
+            ? KeyId.WheelGestureUp
+            : KeyId.WheelGestureDown;
+        if (counter.RecordImpulse(keyId).Counted)
+        {
+            counted++;
+        }
+    }
+
+    return counted;
+}
+
+static long CountOf(KeyboardCounter counter, KeyId keyId) => counter.GetSnapshot().Counts[(int)keyId];
+
+static void WheelGestureMergesWithinWindow()
+{
+    var counter = new KeyboardCounter();
+    var detector = new WheelGestureDetector();
+
+    // 窗口 200ms：三条间隔 50ms 的上滑是「一次动作」，不是三次。
+    Equal(1, FeedWheel(counter, detector, 1, 200, (120, 0), (240, 50), (120, 100)));
+    Equal(1L, CountOf(counter, KeyId.WheelGestureUp));
+
+    // 距上一次事件 300ms > 200ms，才记第二次。
+    Equal(1, FeedWheel(counter, detector, 1, 200, (120, 400)));
+    Equal(2L, CountOf(counter, KeyId.WheelGestureUp));
+
+    // 换一台设备不会被上一台的时间戳吞掉。
+    Equal(1, FeedWheel(counter, detector, 2, 200, (120, 450)));
+    Equal(3L, CountOf(counter, KeyId.WheelGestureUp));
+}
+
+static void WheelDirectionsTimeIndependently()
+{
+    var counter = new KeyboardCounter();
+    var detector = new WheelGestureDetector();
+
+    // 上 -> 下 -> 上，三次都在窗口内。用一个全局时间戳会被压成一次；
+    // 上下分流后是「上 1 次 + 下 1 次」，第三次上滑并入第一次。
+    Equal(1, FeedWheel(counter, detector, 1, 200, (120, 0)));
+    Equal(1, FeedWheel(counter, detector, 1, 200, (-120, 50)));
+    Equal(0, FeedWheel(counter, detector, 1, 200, (120, 100)));
+
+    Equal(1L, CountOf(counter, KeyId.WheelGestureUp));
+    Equal(1L, CountOf(counter, KeyId.WheelGestureDown));
+    Equal(2L, counter.GetSnapshot().TotalCount);
+}
+
+static void WheelZeroDeltaIsIgnored()
+{
+    var counter = new KeyboardCounter();
+    var detector = new WheelGestureDetector();
+
+    var ignored = detector.Observe(1, 0, 1000, 200);
+    Equal(false, ignored.Accepted);
+    Equal(false, ignored.IsNewGesture);
+
+    Equal(1, FeedWheel(counter, detector, 1, 200, (120, 1000)));
+
+    // 零增量夹在中间：如果它推进了时间戳，下一条 1300 会被并进上一次；
+    // 没有推进则距 1000 已 300ms > 200ms，算第二次。
+    Equal(0, FeedWheel(counter, detector, 1, 200, (0, 1200)));
+    Equal(1, FeedWheel(counter, detector, 1, 200, (120, 1300)));
+    Equal(2L, CountOf(counter, KeyId.WheelGestureUp));
+}
+
+static void WheelResetStartsFreshGesture()
+{
+    var detector = new WheelGestureDetector();
+
+    Equal(true, detector.Observe(1, 120, 1000, 200).IsNewGesture);
+    Equal(false, detector.Observe(1, 120, 1100, 200).IsNewGesture);
+
+    // 暂停恢复 / 校准结束：陈旧的 1100 不能继续压着新手势。
+    detector.Reset();
+    Equal(true, detector.Observe(1, 120, 1150, 200).IsNewGesture);
+
+    // 定向清理只影响那一台设备：清一台不存在的设备不能把别的设备清掉。
+    Equal(false, detector.Observe(1, 120, 1200, 200).IsNewGesture);
+    Equal(true, detector.Observe(7, 120, 1300, 200).IsNewGesture);
+    detector.Reset(9);
+    Equal(false, detector.Observe(1, 120, 1310, 200).IsNewGesture);
+    detector.Reset(1);
+    Equal(true, detector.Observe(1, 120, 1320, 200).IsNewGesture);
+}
+
+static void WheelGestureNotCountedWhilePaused()
+{
+    var counter = new KeyboardCounter();
+    var detector = new WheelGestureDetector();
+
+    counter.SetPaused(true);
+    // 判定照常给出「新手势」，但暂停期间不落计数（与键盘、鼠标键一致）。
+    Equal(0, FeedWheel(counter, detector, 1, 200, (120, 0), (120, 500)));
+    Equal(0L, CountOf(counter, KeyId.WheelGestureUp));
+
+    counter.SetPaused(false);
+    Equal(1, FeedWheel(counter, detector, 1, 200, (120, 1000)));
+    Equal(1L, CountOf(counter, KeyId.WheelGestureUp));
+}
+
+static void WheelDistanceAndGestureAreIndependent()
+{
+    var counter = new KeyboardCounter();
+    var detector = new WheelGestureDetector();
+    long up = 0;
+    long down = 0;
+
+    // 同一串原始事件同时产出两个指标：距离逐条累加（不做 120 折算），
+    // 手势只在静默超过窗口时才 +1。
+    (int Delta, long Ticks)[] events =
+    [
+        (120, 0), (120, 16), (240, 32), (120, 64),
+        (-120, 80), (-240, 96),
+        (120, 800),
+    ];
+
+    var gestures = 0;
+    foreach (var (delta, ticks) in events)
+    {
+        var result = detector.Observe(1, delta, ticks, 200);
+        if (delta > 0)
+        {
+            up += delta;
+        }
+        else
+        {
+            down -= delta;
+        }
+
+        if (result is { Accepted: true, IsNewGesture: true })
+        {
+            gestures++;
+        }
+    }
+
+    Equal(720L, up);
+    Equal(360L, down);
+    // 上滑两次（0 与 800 那两簇），下滑一次。
+    Equal(3, gestures);
+    Equal(0L, counter.GetSnapshot().TotalCount);
+
+    // 距离不参与次数：一格里 120 单位的 delta 不会被折算成「1 次」。
+    Equal(0L, CountOf(counter, KeyId.MouseWheelUp));
+    Equal(0L, CountOf(counter, KeyId.MouseWheelDown));
+}
+
+static void WheelDistanceConvertsToNotchesAndCentimeters()
+{
+    Equal(12d, WheelMetrics.Notches(1440));
+    Equal(0d, WheelMetrics.Notches(0));
+
+    // 一格 ≈ 60 DIP，96 DPI 基准下约 1.59 cm；系数调大表示「一次滚得更多行」，估算更长。
+    var centimeters = WheelMetrics.EstimateCentimeters(120, 1.0);
+    Equal(true, Math.Abs(centimeters - 1.5875) < 0.001);
+    Equal(true, WheelMetrics.EstimateCentimeters(120, 1.25) < centimeters);
+    // 非法系数不产生 NaN / 负数。
+    Equal(true, WheelMetrics.EstimateCentimeters(120, double.NaN) > 0);
+    Equal(true, WheelMetrics.EstimateCentimeters(120, 0) > 0);
+
+    Equal(true, WheelMetrics.IsDistanceKey(KeyId.MouseWheelUp));
+    Equal(true, WheelMetrics.IsGestureKey(KeyId.WheelGestureDown));
+    Equal(false, WheelMetrics.IsGestureKey(KeyId.MouseWheelUp));
 }
 
 static void WheelImpulseCountsRepeatedly()
 {
     var counter = new KeyboardCounter();
-    Equal(true, counter.RecordImpulse(KeyId.MouseWheelUp).Counted);
-    Equal(true, counter.RecordImpulse(KeyId.MouseWheelUp).Counted);
-    Equal(2L, counter.GetSnapshot().Counts[(int)KeyId.MouseWheelUp]);
-    Equal(false, counter.GetSnapshot().PressedKeys.Contains(KeyId.MouseWheelUp));
+    Equal(true, counter.RecordImpulse(KeyId.WheelGestureUp).Counted);
+    Equal(true, counter.RecordImpulse(KeyId.WheelGestureUp).Counted);
+    Equal(2L, counter.GetSnapshot().Counts[(int)KeyId.WheelGestureUp]);
+    Equal(false, counter.GetSnapshot().PressedKeys.Contains(KeyId.WheelGestureUp));
 
     counter.SetPaused(true);
-    Equal(false, counter.RecordImpulse(KeyId.MouseWheelDown).Counted);
+    Equal(false, counter.RecordImpulse(KeyId.WheelGestureDown).Counted);
     counter.SetPaused(false);
-    Equal(true, counter.RecordImpulse(KeyId.MouseWheelDown).Counted);
-    Equal(1L, counter.GetSnapshot().Counts[(int)KeyId.MouseWheelDown]);
+    Equal(true, counter.RecordImpulse(KeyId.WheelGestureDown).Counted);
+    Equal(1L, counter.GetSnapshot().Counts[(int)KeyId.WheelGestureDown]);
+}
+
+static void CountVectorV6RoundTrips()
+{
+    Equal(6, CountVectorCodec.KeyMapVersion);
+
+    // 新键位必须追加在末尾：下标一旦前移，历史数据的每一列都会错位。
+    Equal((int)KeyId.MouseXButton2 + 1, (int)KeyId.WheelGestureUp);
+    Equal((int)KeyId.WheelGestureUp + 1, (int)KeyId.WheelGestureDown);
+    Equal((int)KeyId.WheelGestureDown, KeyCatalog.Count - 1);
+
+    var counts = new uint[KeyCatalog.Count];
+    counts[(int)KeyId.WheelGestureUp] = 7;
+    counts[(int)KeyId.WheelGestureDown] = 9;
+    counts[(int)KeyId.MouseWheelUp] = 0;
+    var decoded = CountVectorCodec.Decode(CountVectorCodec.Encode(counts));
+    Equal(counts.Length, decoded.Length);
+    Equal(7u, decoded[(int)KeyId.WheelGestureUp]);
+    Equal(9u, decoded[(int)KeyId.WheelGestureDown]);
+
+    // v5 及更早的数据只写到 MouseWheelDown：新键位必须解成 0，不能越界或抛错。
+    var legacy = new uint[KeyCatalog.Count];
+    legacy[(int)KeyId.MouseWheelDown] = 5;
+    var legacyDecoded = CountVectorCodec.Decode(CountVectorCodec.Encode(legacy));
+    Equal(5u, legacyDecoded[(int)KeyId.MouseWheelDown]);
+    Equal(0u, legacyDecoded[(int)KeyId.WheelGestureUp]);
+    Equal(0u, legacyDecoded[(int)KeyId.WheelGestureDown]);
+}
+
+static async Task WheelDistanceStagesWithMinuteBucketAsync()
+{
+    var store = new FakeMinuteStore();
+    var clock = new ManualClock(DateTimeOffset.FromUnixTimeSeconds(1_800_000_030));
+    await using var recorder = await StatisticsRecorder.CreateAsync(
+        store,
+        TimeSpan.FromHours(1),
+        clock);
+
+    Equal(true, recorder.RecordWheelDistance(up: true, delta: 120));
+    Equal(true, recorder.RecordWheelDistance(up: true, delta: 240));
+    Equal(true, recorder.RecordWheelDistance(up: false, delta: -120));
+
+    var live = recorder.GetCurrentSnapshot();
+    // 距离不进次数向量，也不进 TotalCount。
+    Equal(0L, live.TotalCount);
+    Equal(360L, live.WheelDistanceUp);
+    Equal(120L, live.WheelDistanceDown);
+
+    await recorder.FlushNowAsync();
+
+    var minuteStart = TimeBuckets.ToMinuteStart(clock.UtcNow);
+    var stored = store.DistancesFor(minuteStart);
+    Equal(360L, stored.Up);
+    Equal(120L, stored.Down);
+    // 只有距离、没有按键的一分钟也必须落库，不能当成空桶丢掉。
+    Equal(0L, store.TotalFor(minuteStart));
+    var storedBucket = await store.GetMinuteBucketAsync(minuteStart);
+    Equal(0u, storedBucket!.Counts[(int)KeyId.WheelGestureUp]);
+}
+
+static async Task SchemaV1UpgradesToV2Async()
+{
+    var directory = CreateTestDirectory();
+    var databasePath = Path.Combine(directory, "upgrade.db");
+    const long minuteStart = 1_800_000_000;
+    var blob = CountVectorCodec.Encode(NewCounts((KeyId.A, 4), (KeyId.Escape, 2)));
+
+    try
+    {
+        // 手工造一个 v1 库：与当年的建表语句一致，没有距离列。
+        var connectionString = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+        }.ToString();
+        await using (var connection = new Microsoft.Data.Sqlite.SqliteConnection(connectionString))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE minute_buckets (
+                    bucket_start_utc INTEGER PRIMARY KEY CHECK(bucket_start_utc % 60 = 0),
+                    keymap_version INTEGER NOT NULL,
+                    counts BLOB NOT NULL,
+                    total_count INTEGER NOT NULL CHECK(total_count >= 0),
+                    updated_at_utc INTEGER NOT NULL
+                ) WITHOUT ROWID;
+                CREATE TABLE rollup_10m (
+                    bucket_start_utc INTEGER PRIMARY KEY CHECK(bucket_start_utc % 600 = 0),
+                    keymap_version INTEGER NOT NULL,
+                    counts BLOB NOT NULL,
+                    total_count INTEGER NOT NULL CHECK(total_count >= 0)
+                ) WITHOUT ROWID;
+                CREATE TABLE app_meta (
+                    name TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                ) WITHOUT ROWID;
+                INSERT INTO app_meta(name, value) VALUES('schema_version', '1');
+                PRAGMA user_version=1;
+                """;
+            await command.ExecuteNonQueryAsync();
+
+            await using var insert = connection.CreateCommand();
+            insert.CommandText = """
+                INSERT INTO minute_buckets (
+                    bucket_start_utc, keymap_version, counts, total_count, updated_at_utc)
+                VALUES ($start, 5, $counts, 6, $start);
+                """;
+            insert.Parameters.AddWithValue("$start", minuteStart);
+            insert.Parameters.AddWithValue("$counts", blob);
+            await insert.ExecuteNonQueryAsync();
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+        using (var repository = new KeyanaRepository(databasePath))
+        {
+            await repository.InitializeAsync();
+
+            // 旧行还能读：计数一格不少，距离列取默认 0。
+            var loaded = await repository.GetMinuteBucketAsync(minuteStart);
+            Equal(4u, loaded!.Counts[(int)KeyId.A]);
+            Equal(2u, loaded.Counts[(int)KeyId.Escape]);
+            Equal(0L, loaded.WheelDistanceUp);
+            Equal(0L, loaded.WheelDistanceDown);
+
+            // 新列已存在且可写：同一分钟补写距离后，计数不被抹掉。
+            await repository.UpsertMinuteBucketAsync(
+                new MinuteBucketSnapshot(minuteStart, loaded.Counts, 600, 240));
+            var updated = await repository.GetMinuteBucketAsync(minuteStart);
+            Equal(600L, updated!.WheelDistanceUp);
+            Equal(240L, updated.WheelDistanceDown);
+            Equal(4u, updated.Counts[(int)KeyId.A]);
+
+            var distance = await repository.QueryWheelDistanceAsync(minuteStart, minuteStart + 60);
+            Equal(600L, distance.Up);
+            Equal(240L, distance.Down);
+            Equal(840L, distance.Total);
+        }
+
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        await using var verify = new Microsoft.Data.Sqlite.SqliteConnection(connectionString);
+        await verify.OpenAsync();
+        Equal("2", await ReadScalarAsync(verify, "PRAGMA user_version;"));
+        Equal("2", await ReadScalarAsync(verify, "SELECT value FROM app_meta WHERE name = 'schema_version';"));
+        Equal(
+            "1",
+            await ReadScalarAsync(
+                verify,
+                "SELECT COUNT(*) FROM pragma_table_info('minute_buckets') WHERE name = 'wheel_distance_up';"));
+    }
+    finally
+    {
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+        Directory.Delete(directory, recursive: true);
+    }
+}
+
+static void WheelSettingsFallBackToDefaults()
+{
+    // 越界的窗口不是「钳到边界」，而是回默认值：钳过去会让人以为是自己设的。
+    var tooSmall = new AppSettings { WheelGestureWindowMs = 10 };
+    tooSmall.Validate();
+    Equal(WheelGestureDetector.DefaultWindowMs, tooSmall.WheelGestureWindowMs);
+
+    var tooLarge = new AppSettings { WheelGestureWindowMs = 900 };
+    tooLarge.Validate();
+    Equal(WheelGestureDetector.DefaultWindowMs, tooLarge.WheelGestureWindowMs);
+
+    var valid = new AppSettings { WheelGestureWindowMs = 150 };
+    valid.Validate();
+    Equal(150, valid.WheelGestureWindowMs);
+
+    var nanScale = new AppSettings { WheelDpiScale = double.NaN };
+    nanScale.Validate();
+    Equal(1.0, nanScale.WheelDpiScale);
+
+    var zeroScale = new AppSettings { WheelDpiScale = 0 };
+    zeroScale.Validate();
+    Equal(1.0, zeroScale.WheelDpiScale);
+
+    var validScale = new AppSettings { WheelDpiScale = 1.5 };
+    validScale.Validate();
+    Equal(1.5, validScale.WheelDpiScale);
 }
 
 static async Task DailyUsageMarksActiveAndFireDaysAsync()
@@ -1603,7 +1969,7 @@ file sealed class ManualClock(DateTimeOffset utcNow) : IUtcClock
 file sealed class FakeMinuteStore : IMinuteBucketStore
 {
     private readonly object _gate = new();
-    private readonly Dictionary<long, uint[]> _buckets = [];
+    private readonly Dictionary<long, MinuteBucketSnapshot> _buckets = [];
     private readonly List<MinuteBucketSnapshot> _writes = [];
     private bool _alwaysFail;
 
@@ -1635,9 +2001,7 @@ file sealed class FakeMinuteStore : IMinuteBucketStore
     {
         lock (_gate)
         {
-            MinuteBucketSnapshot? snapshot = _buckets.TryGetValue(bucketStartUtc, out var counts)
-                ? new MinuteBucketSnapshot(bucketStartUtc, (uint[])counts.Clone())
-                : null;
+            var snapshot = _buckets.TryGetValue(bucketStartUtc, out var stored) ? stored.Copy() : null;
             return Task.FromResult(snapshot);
         }
     }
@@ -1663,8 +2027,8 @@ file sealed class FakeMinuteStore : IMinuteBucketStore
                 throw new InvalidOperationException("模拟写入失败。");
             }
 
-            _buckets[snapshot.BucketStartUtc] = (uint[])snapshot.Counts.Clone();
-            _writes.Add(new MinuteBucketSnapshot(snapshot.BucketStartUtc, (uint[])snapshot.Counts.Clone()));
+            _buckets[snapshot.BucketStartUtc] = snapshot.Copy();
+            _writes.Add(snapshot.Copy());
         }
     }
 
@@ -1672,9 +2036,18 @@ file sealed class FakeMinuteStore : IMinuteBucketStore
     {
         lock (_gate)
         {
-            return _buckets.TryGetValue(bucketStartUtc, out var counts)
-                ? counts.Sum(count => (long)count)
-                : 0;
+            return _buckets.TryGetValue(bucketStartUtc, out var snapshot) ? snapshot.TotalCount : 0;
+        }
+    }
+
+    /// <summary>该分钟落盘的距离（上 / 下分开），与次数的 <see cref="TotalFor"/> 互不影响。</summary>
+    public (long Up, long Down) DistancesFor(long bucketStartUtc)
+    {
+        lock (_gate)
+        {
+            return _buckets.TryGetValue(bucketStartUtc, out var snapshot)
+                ? (snapshot.WheelDistanceUp, snapshot.WheelDistanceDown)
+                : (0, 0);
         }
     }
 
