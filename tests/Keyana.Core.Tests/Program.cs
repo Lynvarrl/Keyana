@@ -27,6 +27,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("设备路径提取硬件标识", Sync(DevicePathExtractsHardwareId)),
     ("设备路径缺少硬件标识时退回类名", Sync(DevicePathFallsBackToClass)),
     ("空设备路径降级为未知", Sync(EmptyDevicePathDegrades)),
+    ("未识别日志按五列输出", Sync(UnrecognizedLogLineKeepsColumns)),
+    ("未识别日志拍平制表符并兜底空来源", Sync(UnrecognizedLogLineFlattensAndFallsBack)),
+    ("未识别日志只在打开时写入并轮转", Sync(UnrecognizedLogWritesOnlyWhenEnabledAndRotates)),
     ("稀疏计数向量往返一致", Sync(CountVectorRoundTrips)),
     ("阶段 2 的 Key Map v1 数据仍可读取", LegacyKeyMapRowsRemainReadableAsync),
     ("数据库一分钟写入与绝对快照更新", RepositoryUpsertIsAbsoluteAsync),
@@ -375,6 +378,67 @@ static void EmptyDevicePathDegrades()
     Equal("未知设备", DevicePathLabel.FromPath(null));
     Equal("未知设备", DevicePathLabel.FromPath(""));
     Equal("未知设备", DevicePathLabel.FromPath("   "));
+}
+
+static void UnrecognizedLogLineKeepsColumns()
+{
+    var at = new DateTimeOffset(2026, 11, 21, 11, 5, 6, 123, TimeSpan.FromHours(8));
+    var line = new UnrecognizedInputRecord(at, 0x00, 0x25, 0x00, @"ROOT\FEIZHI_VIRTUAL_KEYBOARD").ToLogLine();
+    var columns = line.Split('\t');
+    Equal(5, columns.Length);
+    Equal("2026-11-21 11:05:06.123 +08:00", columns[0]);
+    Equal("0x00", columns[1]);
+    Equal("0x25", columns[2]);
+    Equal("0x00", columns[3]);
+    Equal(@"ROOT\FEIZHI_VIRTUAL_KEYBOARD", columns[4]);
+    // 表头必须和数据同列数，否则拖进 Excel 会整列错位。
+    Equal(5, UnrecognizedInputRecord.HeaderLine.Split('\t').Length);
+}
+
+static void UnrecognizedLogLineFlattensAndFallsBack()
+{
+    var epoch = DateTimeOffset.UnixEpoch;
+    var flattened = new UnrecognizedInputRecord(epoch, 0, 0, 0, "A\tB\nC").ToLogLine();
+    Equal(5, flattened.Split('\t').Length);
+    Equal("A B C", flattened.Split('\t')[4]);
+    Equal("未知设备", new UnrecognizedInputRecord(epoch, 0, 0, 0, "   ").ToLogLine().Split('\t')[4]);
+}
+
+static void UnrecognizedLogWritesOnlyWhenEnabledAndRotates()
+{
+    var directory = Directory.CreateTempSubdirectory("keyana-unrecognized-");
+    try
+    {
+        var path = Path.Combine(directory.FullName, "unrecognized.log");
+        var log = new UnrecognizedInputLog(path, maxBytes: 200);
+        var record = new UnrecognizedInputRecord(
+            new DateTimeOffset(2026, 11, 21, 11, 5, 6, TimeSpan.FromHours(8)), 0x00, 0x25, 0x00, "A");
+
+        // 关着的时候一个字节都不写。
+        log.Append(record);
+        Equal(false, File.Exists(path));
+
+        log.Enabled = true;
+        log.Append(record);
+        log.Append(record);
+        var lines = File.ReadAllLines(path);
+        Equal(3, lines.Length);
+        Equal(UnrecognizedInputRecord.HeaderLine, lines[0]);
+        Equal(5, lines[1].Split('\t').Length);
+
+        // 继续写，超过 200 字节就轮转；新文件重新写一次表头。
+        for (var index = 0; index < 5; index++)
+        {
+            log.Append(record);
+        }
+
+        Equal(true, File.Exists(path + ".1"));
+        Equal(UnrecognizedInputRecord.HeaderLine, File.ReadAllLines(path)[0]);
+    }
+    finally
+    {
+        directory.Delete(recursive: true);
+    }
 }
 
 static void CountVectorRoundTrips()

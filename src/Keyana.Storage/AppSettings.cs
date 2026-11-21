@@ -39,6 +39,13 @@ public sealed class AppSettings
     public int TimelineBucketMinutes { get; set; } = 10;
 
     /// <summary>
+    /// 是否把「未识别输入」的来源写进 Data\unrecognized.log。
+    /// 默认关闭：这条日志带设备的硬件标识，而 PRIVACY 承诺过不保存设备身份；
+    /// 只在排查注入源时临时打开。它只写文件，不进数据库、不进任何统计。
+    /// </summary>
+    public bool LogUnrecognizedInput { get; set; }
+
+    /// <summary>
     /// 热力图使用的键盘配列 id。找不到对应配列时回落到内置 104；
     /// 只影响画法，不影响任何统计口径。
     /// </summary>

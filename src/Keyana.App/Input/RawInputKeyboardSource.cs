@@ -36,6 +36,7 @@ public sealed class RawInputKeyboardSource : IDisposable
     private readonly Action<KeyId>? _countedKeySink;
     private readonly Action<WheelInputInfo>? _rawWheelSink;
     private readonly Action<WheelInputInfo>? _wheelDistanceSink;
+    private readonly Action<UnrecognizedInputRecord>? _unrecognizedSink;
     private readonly WheelGestureDetector _wheelDetector = new();
     private readonly HwndSource _windowSource;
     private readonly ConcurrentDictionary<nint, string> _deviceNames = new();
@@ -56,17 +57,22 @@ public sealed class RawInputKeyboardSource : IDisposable
     /// <param name="wheelDistanceSink">
     /// 需要入库的滚动距离。暂停与校准旁路期间不触发。
     /// </param>
+    /// <param name="unrecognizedSink">
+    /// 没有扫描码、因此没有计入统计的事件。只用于诊断（写来源日志），不要在这里改统计状态。
+    /// </param>
     public RawInputKeyboardSource(
         nint windowHandle,
         KeyboardCounter counter,
         Action<KeyId>? countedKeySink = null,
         Action<WheelInputInfo>? rawWheelSink = null,
-        Action<WheelInputInfo>? wheelDistanceSink = null)
+        Action<WheelInputInfo>? wheelDistanceSink = null,
+        Action<UnrecognizedInputRecord>? unrecognizedSink = null)
     {
         _counter = counter;
         _countedKeySink = countedKeySink;
         _rawWheelSink = rawWheelSink;
         _wheelDistanceSink = wheelDistanceSink;
+        _unrecognizedSink = unrecognizedSink;
         _windowSource = HwndSource.FromHwnd(windowHandle)
             ?? throw new InvalidOperationException("无法连接窗口消息源。");
 
@@ -312,6 +318,14 @@ public sealed class RawInputKeyboardSource : IDisposable
                 LastUnrecognizedDeviceLabel = deviceLabel;
                 LastUnrecognizedDescription =
                     $"Scan 0x{keyboard.MakeCode:X2} · VK 0x{keyboard.VirtualKey:X2} · Flags 0x{keyboard.Flags:X2} · 来源 {deviceLabel}";
+
+                // 诊断日志：几小时才来一条，只能靠落盘事后对照，人手记时间对不上。
+                _unrecognizedSink?.Invoke(new UnrecognizedInputRecord(
+                    DateTimeOffset.Now,
+                    keyboard.MakeCode,
+                    keyboard.VirtualKey,
+                    keyboard.Flags,
+                    deviceLabel));
             }
         }
     }

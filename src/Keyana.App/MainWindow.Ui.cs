@@ -149,6 +149,8 @@ public partial class MainWindow
             ThemeChipDark.IsChecked = settings.Theme == "Dark";
 
             SnapCheckBox.IsChecked = settings.SnapToTenMinutes;
+            LogUnknownCheckBox.IsChecked = settings.LogUnrecognizedInput;
+            UnrecognizedLog.Enabled = settings.LogUnrecognizedInput;
             SelectFontFamily(settings.FontFamily);
             SelectFontScale(settings.FontScale);
             // 滚轮两处：窗口值要回填到滑块（保存后热更新走同一条路径），距离系数只影响估算。
@@ -388,6 +390,22 @@ public partial class MainWindow
         {
             _ = ApplyAnalysisCustomRangeAsync();
         }
+    }
+
+    /// <summary>
+    /// 「未识别输入」的来源日志。只影响写文件，不碰采集与统计；
+    /// 打开后从下一条未识别事件开始记录，之前的不会补写。
+    /// </summary>
+    private void LogUnknownCheckBox_Changed(object sender, RoutedEventArgs eventArgs)
+    {
+        if (!_uiReady || _settingsUiUpdating || _settings is null)
+        {
+            return;
+        }
+
+        _settings.LogUnrecognizedInput = LogUnknownCheckBox.IsChecked == true;
+        UnrecognizedLog.Enabled = _settings.LogUnrecognizedInput;
+        _ = SaveSettingsAsync();
     }
 
     private void InitializeStartupSetting()

@@ -820,6 +820,12 @@
                                           Checked="StartupAdminCheckBox_Changed" Unchecked="StartupAdminCheckBox_Changed" />
                                 <CheckBox x:Name="SnapCheckBox" Content="自定义范围向外吸附到 10 分钟边界"
                                           Margin="0,12,0,0" Checked="SnapCheckBox_Changed" Unchecked="SnapCheckBox_Changed" />
+                                <CheckBox x:Name="LogUnknownCheckBox" Content="记录未识别输入的来源"
+                                          Margin="0,12,0,0"
+                                          Checked="LogUnknownCheckBox_Changed" Unchecked="LogUnknownCheckBox_Changed" />
+                                <TextBlock x:Name="LogUnknownHintText"
+                                           Text="写入 Data\unrecognized.log，制表符分隔，可直接用 Excel 打开。只记时间、Scan、VK、Flags 与来源设备，不进数据库、不影响统计；排查完取消勾选即可。"
+                                           Style="{StaticResource CaptionText}" Margin="24,5,0,0" TextWrapping="Wrap" />
 
                                 <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,18" />
 

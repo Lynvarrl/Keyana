@@ -239,7 +239,8 @@ public partial class MainWindow : Window
                     _counter,
                     keyId => _recorder?.RecordKeyPress(keyId),
                     rawWheelSink: OnRawWheelObserved,
-                    wheelDistanceSink: OnWheelDistanceObserved);
+                    wheelDistanceSink: OnWheelDistanceObserved,
+                    unrecognizedSink: UnrecognizedLog.Record);
                 _rawInput.WheelGestureWindowMs = _settings?.WheelGestureWindowMs
                     ?? WheelGestureDetector.DefaultWindowMs;
             }
