@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Windows;
+using System.Windows.Input;
 using System.Windows.Threading;
 using Keyana.Core;
 using Keyana.Storage;
@@ -41,10 +43,12 @@ public partial class MainWindow
     /// <summary>分析页展示用的手势计数（已排除距离键、已应用筛选）。</summary>
     private ulong[] _analysisWheelGestureCounts = new ulong[KeyCatalog.Count];
 
+    /// <summary>校准浮层是否打开。状态徽章要用它把「滚轮暂不记录」说出来。</summary>
+    private bool _wheelCalibrating;
+
     private void InitializeWheelUi()
     {
         WheelPanel.WindowChanged += (_, windowMs) => ApplyWheelWindow(windowMs);
-        WheelPanel.CalibrationChanged += (_, calibrating) => ApplyWheelCalibration(calibrating);
         WheelPanel.DpiScaleChanged += (_, scale) => ApplyWheelDpiScale(scale);
 
         _wheelSettingsSaveTimer.Tick += async (_, _) =>
@@ -52,6 +56,83 @@ public partial class MainWindow
             _wheelSettingsSaveTimer.Stop();
             await SaveSettingsAsync();
         };
+    }
+
+    /// <summary>设置页的摘要行：不进浮层也能看到当前窗口与系数。</summary>
+    private void UpdateWheelWindowSummary()
+    {
+        var windowMs = _settings?.WheelGestureWindowMs ?? WheelGestureDetector.DefaultWindowMs;
+        var scale = _settings?.WheelDpiScale ?? 1.0;
+        WheelWindowSummaryText.Text = string.Create(
+            CultureInfo.CurrentCulture,
+            $"手势窗口 {windowMs} ms · 距离系数 {scale:0.00}");
+    }
+
+    /// <summary>
+    /// 打开校准浮层：进入即开始测量。旁路只挡住滚轮的副作用，
+    /// 判定仍在跑（面板要显示结果），其它键鼠照常计数。
+    /// </summary>
+    private void OpenWheelCalibration()
+    {
+        if (WheelCalibrationOverlay.Visibility == Visibility.Visible)
+        {
+            return;
+        }
+
+        if (_rawInput is not null)
+        {
+            _rawInput.WheelBypass = true;
+            _rawInput.ResetWheelState();
+        }
+
+        _wheelCalibrating = true;
+        RefreshStatusVisual();
+        WheelPanel.BeginSession();
+        WheelCalibrationOverlay.Visibility = Visibility.Visible;
+        // 浮层自己拿焦点，Esc 才收得到；不给按钮焦点，避免一进来就出现焦点框。
+        WheelCalibrationOverlay.Focus();
+    }
+
+    /// <summary>
+    /// 关闭校准浮层：结束测量。这是唯一的出口，返回按钮、Esc、收进托盘、重启与退出
+    /// 全部走这里，所以不存在「人回到主界面、旁路还开着」的路径。
+    ///
+    /// 判定状态必须清空：校准期间的时间戳若留到结束后，会把恢复后的第一下手势吞掉。
+    /// </summary>
+    private void CloseWheelCalibration()
+    {
+        if (WheelCalibrationOverlay.Visibility != Visibility.Visible)
+        {
+            return;
+        }
+
+        WheelCalibrationOverlay.Visibility = Visibility.Collapsed;
+        WheelPanel.EndSession();
+
+        if (_rawInput is not null)
+        {
+            _rawInput.WheelBypass = false;
+            _rawInput.ResetWheelState();
+        }
+
+        _wheelCalibrating = false;
+        RefreshStatusVisual();
+        Keyboard.ClearFocus();
+    }
+
+    private void OpenWheelCalibrationButton_Click(object sender, RoutedEventArgs eventArgs) =>
+        OpenWheelCalibration();
+
+    private void WheelCalibrationBackButton_Click(object sender, RoutedEventArgs eventArgs) =>
+        CloseWheelCalibration();
+
+    private void WheelCalibrationOverlay_PreviewKeyDown(object sender, KeyEventArgs eventArgs)
+    {
+        if (eventArgs.Key == Key.Escape)
+        {
+            CloseWheelCalibration();
+            eventArgs.Handled = true;
+        }
     }
 
     /// <summary>
@@ -72,21 +153,8 @@ public partial class MainWindow
         {
             _rawInput.WheelGestureWindowMs = clamped;
         }
-    }
 
-    /// <summary>
-    /// 校准开关：开启即进入旁路。判定状态必须清空——校准期间的时间戳若留到结束后，
-    /// 会把恢复后的第一下手势吞掉。
-    /// </summary>
-    private void ApplyWheelCalibration(bool calibrating)
-    {
-        if (_rawInput is null)
-        {
-            return;
-        }
-
-        _rawInput.WheelBypass = calibrating;
-        _rawInput.ResetWheelState();
+        UpdateWheelWindowSummary();
     }
 
     private void ApplyWheelDpiScale(double scale)
@@ -99,6 +167,7 @@ public partial class MainWindow
         settings.WheelDpiScale = scale;
         _wheelSettingsSaveTimer.Stop();
         _wheelSettingsSaveTimer.Start();
+        UpdateWheelWindowSummary();
         // 估算值只影响展示，改完立刻重算两张卡片，不用等下一次查询。
         UpdateWheelMetricsDisplay();
         UpdateAnalysisWheelMetrics(_analysisWheelDistance, _analysisWheelGestureCounts);

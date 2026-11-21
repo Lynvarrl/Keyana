@@ -631,13 +631,16 @@ public partial class MainWindow : Window
     private void RefreshStatusVisual()
     {
         // 只换文字与圆点的颜色：绿/黄浅色底在卡片上太抢眼，用户要求去掉。
-        var (text, foreground, dot) = _statusMode switch
-        {
-            StatusMode.Paused => ("已暂停", "WarningBrush", "WarningBrush"),
-            StatusMode.SaveError => ("保存异常", "DangerBrush", "DangerBrush"),
-            StatusMode.Error => ("启动失败", "DangerBrush", "DangerBrush"),
-            _ => ("正在采集", "SuccessBrush", "SuccessBrush"),
-        };
+        // 校准中优先说出来：这时候滚轮并没有进统计，继续写「正在采集」是在骗人。
+        var (text, foreground, dot) = _wheelCalibrating && _statusMode == StatusMode.Collecting
+            ? ("滚轮校准中", "WarningBrush", "WarningBrush")
+            : _statusMode switch
+            {
+                StatusMode.Paused => ("已暂停", "WarningBrush", "WarningBrush"),
+                StatusMode.SaveError => ("保存异常", "DangerBrush", "DangerBrush"),
+                StatusMode.Error => ("启动失败", "DangerBrush", "DangerBrush"),
+                _ => ("正在采集", "SuccessBrush", "SuccessBrush"),
+            };
 
         StatusText.Text = text;
         StatusText.Foreground = FindBrush(foreground);
@@ -758,6 +761,9 @@ public partial class MainWindow : Window
 
         _isClosing = true;
         IsEnabled = false;
+        // 托盘退出不会走 Closing（那里已经因为 _closeCompleted 提前返回），
+        // 这里必须自己收掉校准浮层，否则退出前那一段滚轮仍是旁路状态。
+        CloseWheelCalibration();
         _refreshTimer.Stop();
         _maintenanceTimer.Stop();
         _rawInput?.Dispose();
@@ -953,7 +959,9 @@ public partial class MainWindow : Window
         }
 
         // 收进托盘时把没处理完的确认浮层收掉：窗口隐藏后浮层还留在屏幕上会挡住别的程序。
+        // 校准浮层同理，而且更要紧——它关掉才会把滚轮的旁路解除，否则会一直不记录。
         CloseConfirm(false);
+        CloseWheelCalibration();
         eventArgs.Cancel = true;
         Hide();
     }

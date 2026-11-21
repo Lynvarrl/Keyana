@@ -7,7 +7,7 @@ using Keyana.Core;
 namespace Keyana.App.Controls;
 
 /// <summary>
-/// 设置页的「滚轮校准」面板：调手势窗口 + 旁路观测真实滚轮事件。
+/// 滚轮校准面板：调手势窗口 + 旁路观测真实滚轮事件。
 ///
 /// 为什么需要校准：手势动作数靠「静默多久算一次新动作」判定，而这个阈值跟设备
 /// （机械滚轮 / 触控板 / 高精度滚轮）、手的习惯都有关系，写在代码里只能拍一个默认值。
@@ -15,6 +15,10 @@ namespace Keyana.App.Controls;
 ///
 /// 旁路期间滚轮不进统计：判定照常跑（要显示结果），但计数与距离都不落库，
 /// 这一段是「测量」而不是「记录」。
+///
+/// 面板**不带开关**：它被放在一个浮层里，浮层打开时调 <see cref="BeginSession"/>、
+/// 关闭时调 <see cref="EndSession"/>。开关只有浮层一处状态源，才不会出现
+/// 「人走了、旁路还开着」这种悄悄不记录的情况。
 ///
 /// 全部用代码搭，配色走主题资源，换肤时由 WPF 自动跟随。
 /// </summary>
@@ -24,8 +28,7 @@ public sealed class WheelCalibrationPanel : Grid
 
     private readonly Slider _slider;
     private readonly TextBlock _windowValueText;
-    private readonly Button _toggleButton;
-    private readonly TextBlock _toggleHintText;
+    private readonly TextBlock _stateText;
     private readonly TextBox _dpiBox;
     private readonly TextBlock _directionText;
     private readonly TextBlock _gestureText;
@@ -116,16 +119,6 @@ public sealed class WheelCalibrationPanel : Grid
 
         var actions = new WrapPanel { Margin = new Thickness(0, 14, 0, 0) };
 
-        _toggleButton = new Button
-        {
-            Content = "开始校准",
-            Focusable = false,
-            Padding = new Thickness(13, 6, 13, 6),
-        };
-        _toggleButton.SetResourceReference(StyleProperty, "FilterChipButtonStyle");
-        _toggleButton.Click += Toggle_Click;
-        actions.Children.Add(_toggleButton);
-
         var clearButton = new Button
         {
             Content = "清空校准计数",
@@ -135,17 +128,19 @@ public sealed class WheelCalibrationPanel : Grid
         clearButton.SetResourceReference(StyleProperty, "FilterChipButtonStyle");
         clearButton.Click += (_, _) => ClearCounts();
         actions.Children.Add(clearButton);
-        left.Children.Add(actions);
 
-        _toggleHintText = new TextBlock
+        // 校准状态由外层浮层掌控（进入即开始、返回即结束），面板只负责如实显示，
+        // 不再自带开关——省得出现「浮层已关、旁路还开着」这种没人发现的状态。
+        _stateText = new TextBlock
         {
-            Text = "校准期间滚轮只做测量：不计入手势次数，也不累加距离；键盘与鼠标按键照常统计。",
-            TextWrapping = TextWrapping.Wrap,
-            Margin = new Thickness(0, 10, 0, 0),
+            Text = "等待进入校准",
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0, 0, 0),
         };
-        _toggleHintText.SetResourceReference(TextBlock.FontSizeProperty, "FontSizeCaption");
-        _toggleHintText.SetResourceReference(TextBlock.ForegroundProperty, "TertiaryTextBrush");
-        left.Children.Add(_toggleHintText);
+        _stateText.SetResourceReference(TextBlock.FontSizeProperty, "FontSizeCaption");
+        _stateText.SetResourceReference(TextBlock.ForegroundProperty, "TertiaryTextBrush");
+        actions.Children.Add(_stateText);
+        left.Children.Add(actions);
 
         var divider = new Border
         {
@@ -244,13 +239,32 @@ public sealed class WheelCalibrationPanel : Grid
     /// <summary>窗口值变化（用户拖动滑块或点预设）。</summary>
     public event EventHandler<int>? WindowChanged;
 
-    /// <summary>校准开关切换。</summary>
-    public event EventHandler<bool>? CalibrationChanged;
-
-    /// <summary>DPI 系数被用户改动。</summary>
+    /// <summary>距离系数被用户改动。</summary>
     public event EventHandler<double>? DpiScaleChanged;
 
     public bool IsCalibrating => _calibrating;
+
+    /// <summary>
+    /// 开始一次校准：清空读数并进入旁路。由承接它的浮层在打开时调用，
+    /// 面板自己不提供开关——「进入即测量、返回即结束」只有一处状态源，不会忘关。
+    /// </summary>
+    public void BeginSession()
+    {
+        _calibrating = true;
+        _stateText.Text = "● 正在校准 · 返回即结束";
+        _stateText.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
+        ClearCounts();
+    }
+
+    /// <summary>结束校准：回到「等待进入」的静默状态，读数保留到下次进入时清空。</summary>
+    public void EndSession()
+    {
+        _calibrating = false;
+        _stateText.Text = "已结束校准";
+        _stateText.SetResourceReference(TextBlock.ForegroundProperty, "TertiaryTextBrush");
+        _directionText.Text = "等待滚动";
+        _directionText.SetResourceReference(TextBlock.ForegroundProperty, "TertiaryTextBrush");
+    }
 
     /// <summary>程序回填用：不触发 <see cref="WindowChanged"/>。</summary>
     public void SetWindowMs(int windowMs)
@@ -346,25 +360,6 @@ public sealed class WheelCalibrationPanel : Grid
         {
             _slider.Value = preset;
         }
-    }
-
-    private void Toggle_Click(object sender, RoutedEventArgs eventArgs) =>
-        SetCalibrating(!_calibrating);
-
-    private void SetCalibrating(bool calibrating)
-    {
-        _calibrating = calibrating;
-        _toggleButton.Content = calibrating ? "停止校准" : "开始校准";
-        _toggleButton.Tag = calibrating ? "Active" : null;
-        _toggleHintText.Text = calibrating
-            ? "校准中：滚轮事件只在这里显示，不进入统计。停止后从下一个事件重新开始判定。"
-            : "校准期间滚轮只做测量：不计入手势次数，也不累加距离；键盘与鼠标按键照常统计。";
-        _toggleHintText.SetResourceReference(
-            TextBlock.ForegroundProperty,
-            calibrating ? "AccentBrush" : "TertiaryTextBrush");
-
-        ClearCounts();
-        CalibrationChanged?.Invoke(this, calibrating);
     }
 
     private void DpiBox_KeyDown(object sender, KeyEventArgs eventArgs)

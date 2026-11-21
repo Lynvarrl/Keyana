@@ -883,14 +883,30 @@
                         </Border>
                     </Grid>
 
-                    <!-- 滚轮：距离与手势是两套指标，手势窗口更适合按自己的设备现场调。 -->
+                    <!-- 滚轮：距离与手势是两套指标，手势窗口更适合按自己的设备现场调。
+                         调节界面放在二级浮层里，因为「校准中」是一个会暂停滚轮入库的临时状态：
+                         必须让人一眼看见、并且离开就一定结束，不能在设置页里悄悄开着。 -->
                     <Border Grid.Row="2" Style="{StaticResource CardStyle}" Padding="20" Margin="0,14,0,0">
-                        <StackPanel>
-                            <TextBlock Text="滚轮采集与校准" Style="{StaticResource CardTitleText}" />
-                            <TextBlock TextWrapping="Wrap" Style="{StaticResource CaptionText}" Margin="0,3,0,0"
-                                       Text="两个指标同时记：滚动距离忠实保存原始 delta，滑动手势按静默窗口计数。窗口合不合手只能自己试——滚一下，看右侧判定成了几次动作。" />
-                            <controls:WheelCalibrationPanel x:Name="WheelPanel" Margin="0,16,0,0" />
-                        </StackPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Margin="0,0,20,0">
+                                <TextBlock Text="滚轮采集与校准" Style="{StaticResource CardTitleText}" />
+                                <TextBlock TextWrapping="Wrap" Style="{StaticResource CaptionText}" Margin="0,3,0,0"
+                                           Text="两个指标同时记：滚动距离忠实保存原始 delta，滑动手势按静默窗口计数。窗口合不合手只能自己试。" />
+                                <TextBlock x:Name="WheelWindowSummaryText" Text="手势窗口 200 ms · 距离系数 1.00"
+                                           FontWeight="SemiBold" FontSize="{DynamicResource FontSizeSmall}"
+                                           Margin="0,10,0,0" />
+                                <TextBlock TextWrapping="Wrap" Style="{StaticResource CaptionText}" Margin="0,3,0,0"
+                                           Text="校准界面里滚轮只做测量、不入库；返回主界面时会自动结束校准。" />
+                            </StackPanel>
+                            <Button x:Name="OpenWheelCalibrationButton" Grid.Column="1" Content="打开校准…"
+                                    Style="{StaticResource SecondaryButtonStyle}" Padding="16,7"
+                                    VerticalAlignment="Center" Focusable="False"
+                                    Click="OpenWheelCalibrationButton_Click" />
+                        </Grid>
                     </Border>
 
                     <Border Grid.Row="3" Style="{StaticResource CardStyle}" Padding="20" Margin="0,14,0,0"
@@ -982,6 +998,45 @@
                 </Grid>
             </Grid>
         </ScrollViewer>
+
+        <!-- ================= 滚轮校准浮层 =================
+             校准会临时把滚轮从统计里摘出去（旁路），是个「必须能一眼看见」的状态，
+             所以做成盖住整个窗口的二级界面，而不是塞在设置页里。
+             只有两处出口：返回按钮与 Esc，两者都会走同一个关闭流程，
+             由它负责把旁路关掉、判定状态清空——任何路径都不会带着旁路回到主界面。
+             窗口收进托盘、重启、退出时也会先关掉这个浮层。 -->
+        <Grid x:Name="WheelCalibrationOverlay" Grid.ColumnSpan="2" Visibility="Collapsed"
+              Background="#A6000000" Focusable="True"
+              PreviewKeyDown="WheelCalibrationOverlay_PreviewKeyDown"
+              KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.ControlTabNavigation="Cycle">
+            <Border Width="920" Style="{StaticResource CardStyle}" Padding="26,22"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="滚轮校准" Style="{StaticResource CardTitleText}" />
+                            <TextBlock TextWrapping="Wrap" Style="{StaticResource CaptionText}" Margin="0,4,0,0"
+                                       Text="一边滚一边看判定结果：明明是一次连续滑动却被算成好几次，就把窗口调大；每次起手都被并进上一次，就调小。" />
+                        </StackPanel>
+                        <Button x:Name="WheelCalibrationBackButton" Grid.Column="1" Content="返回主界面"
+                                Style="{StaticResource SecondaryButtonStyle}" Padding="16,7"
+                                VerticalAlignment="Center" Focusable="False"
+                                Click="WheelCalibrationBackButton_Click" />
+                    </Grid>
+
+                    <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,16,0,0" />
+
+                    <controls:WheelCalibrationPanel x:Name="WheelPanel" Margin="0,18,0,0" />
+
+                    <TextBlock TextWrapping="Wrap" Style="{StaticResource CaptionText}" Margin="0,16,0,0"
+                               Text="校准期间滚轮只做测量：不计入手势次数，也不累加距离；键盘与鼠标按键照常统计。按 Esc 或点「返回主界面」结束，滚轮会立刻恢复正常记录。" />
+                </StackPanel>
+            </Border>
+        </Grid>
 
         <!-- ================= 二次确认浮层 =================
              系统 MessageBox 在深色主题下是一块白框，和界面完全脱节；
