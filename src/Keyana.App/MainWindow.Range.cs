@@ -156,7 +156,7 @@ public partial class MainWindow
         try
         {
             var storedCounts = new ulong[KeyCatalog.Count];
-            var storedTimeCounts = new ulong[TenMinuteTimelineControl.SegmentCount];
+            var storedTimeCounts = new ulong[TimeOfDayTimelineControl.SegmentCount];
             var liveSnapshot = _recorder?.GetCurrentSnapshot();
             if (liveSnapshot is not null &&
                 liveSnapshot.BucketStartUtc >= range.StartUtc &&
@@ -185,6 +185,14 @@ public partial class MainWindow
 
             _selectedStoredCounts = storedCounts;
             _selectedStoredTimeCounts = storedTimeCounts;
+            // 分钟级时段缓存跟着范围走：范围一变就作废，需要时再取一次。
+            // 十分钟汇总拼不出来的档位才要这份数据，默认路径不额外查库。
+            _timelineMinuteTotals = null;
+            _timelineMinuteStartUtc = null;
+            if (NeedsTimelineMinuteData)
+            {
+                await EnsureTimelineMinutesAsync(force: true);
+            }
             // 距离与次数分开取：次数走十分钟汇总拼装，距离只能逐分钟求和，
             // 而且必须按同一条「实时分钟不重复计」的切分方式来查。
             _selectedStoredWheelDistance = await QueryStoredWheelDistanceAsync(range, liveSnapshot);
@@ -516,7 +524,14 @@ public partial class MainWindow
             _rowsView.Refresh();
         }
 
-        DailyTimeline.SetData(timeCounts, _currentPalette);
+        UpdateTimelineCaption();
+        ApplyTimelineNow();
+        // 分钟级档位的数据会过期（新的一分钟已落盘）：后台补一次，不阻塞界面。
+        if (NeedsTimelineMinuteData && TimelineMinutesStale())
+        {
+            _ = EnsureTimelineMinutesAsync();
+        }
+
         var peakCount = timeCounts.Max();
         if (peakCount == 0)
         {
@@ -664,7 +679,7 @@ public partial class MainWindow
 
         UpdateGradientBar();
         RenderHeatmap(_counter.GetSnapshot().PressedKeys);
-        DailyTimeline.SetData(_selectedDisplayTimeCounts, _currentPalette);
+        ApplyTimelineNow();
         ActivityStrip.SetPalette(_currentPalette);
         AnalysisDailyStrip.SetPalette(_currentPalette);
 

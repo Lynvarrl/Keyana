@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
@@ -16,6 +17,7 @@ public sealed class RawInputKeyboardSource : IDisposable
     private const uint RidevInputSink = 0x00000100;
     private const uint RidevDevNotify = 0x00002000;
     private const int GidcRemoval = 2;
+    private const uint RidiDeviceName = 0x20000007;
     private const int VkMenu = 0x12;
     private const int VkTab = 0x09;
     private const ushort RiMouseLeftButtonDown = 0x0001;
@@ -36,6 +38,8 @@ public sealed class RawInputKeyboardSource : IDisposable
     private readonly Action<WheelInputInfo>? _wheelDistanceSink;
     private readonly WheelGestureDetector _wheelDetector = new();
     private readonly HwndSource _windowSource;
+    private readonly ConcurrentDictionary<nint, string> _deviceNames = new();
+    private readonly ConcurrentDictionary<string, int> _unrecognizedByDevice = new(StringComparer.OrdinalIgnoreCase);
     private readonly Timer _systemShortcutTimer;
     private readonly object _systemShortcutGate = new();
     private int _unrecognizedMakeCount;
@@ -104,6 +108,19 @@ public sealed class RawInputKeyboardSource : IDisposable
     public int UnrecognizedMakeCount => Volatile.Read(ref _unrecognizedMakeCount);
 
     public string? LastUnrecognizedDescription { get; private set; }
+
+    /// <summary>最近一条「未识别」事件的来源设备标签，供界面单独展示。</summary>
+    public string? LastUnrecognizedDeviceLabel { get; private set; }
+
+    /// <summary>
+    /// 「未识别」事件按来源设备聚合的计数，形如 "VID_1234&PID_5678 × 30"。
+    /// 用来区分是键盘固件偶发丢扫描码，还是某个虚拟设备 / 注入源在持续造事件。
+    /// </summary>
+    public IReadOnlyList<string> UnrecognizedByDevice => _unrecognizedByDevice
+        .OrderByDescending(pair => pair.Value)
+        .ThenBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+        .Select(pair => $"{pair.Key} × {pair.Value:N0}")
+        .ToList();
 
     /// <summary>手势窗口（毫秒），热更新：只影响改动之后的新事件。</summary>
     public int WheelGestureWindowMs
@@ -211,6 +228,8 @@ public sealed class RawInputKeyboardSource : IDisposable
         Interlocked.Exchange(ref _unrecognizedMakeCount, 0);
         LastInputDescription = "等待键盘输入…";
         LastUnrecognizedDescription = null;
+        LastUnrecognizedDeviceLabel = null;
+        _unrecognizedByDevice.Clear();
         _wheelDetector.Reset();
     }
 
@@ -223,6 +242,7 @@ public sealed class RawInputKeyboardSource : IDisposable
         else if (message == WmInputDeviceChange && wParam == GidcRemoval)
         {
             _counter.RemoveDevice(lParam);
+            _deviceNames.TryRemove(lParam, out _);
             // 只清这台设备：另一台鼠标正在进行的滚动不该被打断。
             _wheelDetector.Reset(lParam);
         }
@@ -286,11 +306,43 @@ public sealed class RawInputKeyboardSource : IDisposable
 
             if (!processResult.Recognized)
             {
+                var deviceLabel = GetDeviceLabel(rawInput.Header.Device);
                 Interlocked.Increment(ref _unrecognizedMakeCount);
-                LastUnrecognizedDescription = $"Scan 0x{keyboard.MakeCode:X2} · VK 0x{keyboard.VirtualKey:X2} · Flags 0x{keyboard.Flags:X2}";
+                _unrecognizedByDevice.AddOrUpdate(deviceLabel, 1, (_, count) => count + 1);
+                LastUnrecognizedDeviceLabel = deviceLabel;
+                LastUnrecognizedDescription =
+                    $"Scan 0x{keyboard.MakeCode:X2} · VK 0x{keyboard.VirtualKey:X2} · Flags 0x{keyboard.Flags:X2} · 来源 {deviceLabel}";
             }
         }
     }
+
+    /// <summary>查询设备接口路径并压成可读标签；结果按设备句柄缓存。</summary>
+    private string GetDeviceLabel(nint device)
+        => _deviceNames.GetOrAdd(device, static handle =>
+        {
+            var size = 0u;
+            // 先问长度：RIDI_DEVICENAME 的 pcbSize 以「字符」计（实测 70 对应 69 个字符 + 结尾 0）。
+            if (GetRawInputDeviceInfo(handle, RidiDeviceName, nint.Zero, ref size) == uint.MaxValue || size is 0 or > 4096)
+            {
+                return "未知设备";
+            }
+
+            // 必须按字符数 × sizeof(char) 分配：这个 API 不校验 pcbSize，缓冲区给小了会直接越界写堆。
+            var buffer = Marshal.AllocHGlobal((int)size * sizeof(char));
+            try
+            {
+                if (GetRawInputDeviceInfo(handle, RidiDeviceName, buffer, ref size) == uint.MaxValue)
+                {
+                    return "未知设备";
+                }
+
+                return DevicePathLabel.FromPath(Marshal.PtrToStringUni(buffer));
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
+        });
 
     private void ProcessMouse(RawInput rawInput)
     {
@@ -442,6 +494,13 @@ public sealed class RawInputKeyboardSource : IDisposable
         out RawInput data,
         ref uint size,
         uint headerSize);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint GetRawInputDeviceInfo(
+        nint device,
+        uint command,
+        nint data,
+        ref uint size);
 
     [DllImport("user32.dll")]
     private static extern short GetAsyncKeyState(int virtualKey);

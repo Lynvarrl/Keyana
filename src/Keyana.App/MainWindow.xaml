@@ -321,14 +321,19 @@
                                 </Grid.ColumnDefinitions>
                                 <StackPanel>
                                     <TextBlock Text="时段分布" Style="{StaticResource CardTitleText}" />
-                                    <TextBlock Text="所选范围按每天相同的 10 分钟时段汇总"
-                                               Style="{StaticResource CaptionText}" Margin="0,3,0,0" />
+                                    <TextBlock x:Name="TimelineCaptionText" Text="所选范围按每天相同的时段汇总"
+                                               Style="{StaticResource CaptionText}" Margin="0,3,0,0" TextWrapping="Wrap" />
                                 </StackPanel>
-                                <TextBlock x:Name="DailyTimelineSummaryText" Grid.Column="1"
-                                           Text="暂无输入" Style="{StaticResource CaptionText}"
-                                           VerticalAlignment="Center" />
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
+                                    <TextBlock Text="每块" Style="{StaticResource CaptionText}"
+                                               VerticalAlignment="Center" Margin="0,0,6,0" />
+                                    <controls:MinuteBucketPicker x:Name="MinuteBucketPicker" />
+                                    <TextBlock x:Name="DailyTimelineSummaryText" Margin="14,0,0,0"
+                                               Text="暂无输入" Style="{StaticResource CaptionText}"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
                             </Grid>
-                            <controls:TenMinuteTimelineControl x:Name="DailyTimeline" Margin="2,16,2,0" />
+                            <controls:TimeOfDayTimelineControl x:Name="DailyTimeline" Margin="2,16,2,0" />
                         </StackPanel>
                     </Border>
 

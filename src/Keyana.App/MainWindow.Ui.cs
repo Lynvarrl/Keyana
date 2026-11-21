@@ -130,6 +130,12 @@ public partial class MainWindow
             SelectColorBasis(KeyboardBasisComboBox, _keyboardBasis);
             SelectColorBasis(MouseBasisComboBox, _mouseBasis);
 
+            _timelineBucketMinutes = TimeOfDayTimelineControl.BucketLadder.Contains(settings.TimelineBucketMinutes)
+                ? settings.TimelineBucketMinutes
+                : TimeOfDayTimelineControl.DefaultBucketMinutes;
+            MinuteBucketPicker.Value = _timelineBucketMinutes;
+            UpdateTimelineCaption();
+
             // 配列可能来自 Data\layouts：找不到就回落内置 104，绝不让设置里一个旧 id 挡住启动。
             ApplyLayout(
                 _layoutLibrary?.Find(settings.KeyboardLayoutId) ?? KeyLayouts.Default,

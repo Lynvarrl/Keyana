@@ -69,11 +69,12 @@ public partial class MainWindow : Window
     // 概览与分析各自独立筛选，只靠「同步到另一页」互相复制；null 表示未筛选。
     private IReadOnlySet<KeyId>? _overviewFilter;
     private IReadOnlySet<KeyId>? _analysisFilter;
-    private ulong[] _selectedDisplayTimeCounts = new ulong[TenMinuteTimelineControl.SegmentCount];
-    private ulong[] _selectedStoredTimeCounts = new ulong[TenMinuteTimelineControl.SegmentCount];
+    private ulong[] _selectedDisplayTimeCounts = new ulong[TimeOfDayTimelineControl.SegmentCount];
+    private ulong[] _selectedStoredTimeCounts = new ulong[TimeOfDayTimelineControl.SegmentCount];
     private uint[]? _lastLiveCounts;
     private long? _selectedLiveBucketStart;
     private HashSet<KeyId> _lastVisualPressed = [];
+    private int _lastUnknownCount = -1;
     private HeatPalette _currentPalette = HeatPalette.BlueMagenta;
     private HeatScaleMode _currentScaleMode = HeatScaleMode.SquareRoot;
     private ColorBasis _keyboardBasis = ColorBasis.KeyboardOnly;
@@ -129,7 +130,7 @@ public partial class MainWindow : Window
             _currentPalette,
             _keyboardBasis,
             _mouseBasis);
-        DailyTimeline.SetData(_selectedDisplayTimeCounts, _currentPalette);
+        InitializeTimelineControls();
         ActivityStrip.SetPalette(_currentPalette);
         AnalysisDailyStrip.SetPalette(_currentPalette);
         UpdateGradientBar();
@@ -295,9 +296,26 @@ public partial class MainWindow : Window
         if (_rawInput is not null)
         {
             LastInputText.Text = _rawInput.LastInputDescription;
-            UnknownInputText.Text = _rawInput.LastUnrecognizedDescription is { } unknown
-                ? $"未识别：{_rawInput.UnrecognizedMakeCount:N0} · 最近 {unknown}"
-                : $"未识别：{_rawInput.UnrecognizedMakeCount:N0}";
+
+            // 150ms 刷一次，只有计数真的变了才重建文本和提示：否则每秒六次在 UI 线程上重排字典、拼字符串。
+            var unknownCount = _rawInput.UnrecognizedMakeCount;
+            if (unknownCount != _lastUnknownCount)
+            {
+                _lastUnknownCount = unknownCount;
+
+                // 这一列只放「多少次 + 来自谁」：扫描码 / VK / Flags 在左边「最近输入」已经有一份，
+                // 挤在这里会被 TextTrimming 吃掉行尾，而来源正是要看的那一段。
+                UnknownInputText.Text = _rawInput.LastUnrecognizedDescription is null
+                    ? $"未识别：{unknownCount:N0}"
+                    : $"未识别：{unknownCount:N0} · 来源 {_rawInput.LastUnrecognizedDeviceLabel ?? "未知设备"}";
+
+                var byDevice = _rawInput.UnrecognizedByDevice;
+                UnknownInputText.ToolTip = byDevice.Count == 0
+                    ? null
+                    : $"最近一条：{_rawInput.LastUnrecognizedDescription}{Environment.NewLine}{Environment.NewLine}"
+                      + "按来源设备聚合：" + Environment.NewLine
+                      + string.Join(Environment.NewLine, byDevice);
+            }
         }
 
         if (ActiveOnlyCheckBox.IsChecked == true)

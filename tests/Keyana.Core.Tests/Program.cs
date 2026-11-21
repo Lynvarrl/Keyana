@@ -24,6 +24,9 @@ var tests = new (string Name, Func<Task> Run)[]
     ("界面清零可重置残留按下状态", Sync(ClearCanResetPressedState)),
     ("设备移除会清理按下状态", Sync(RemovingDeviceClearsPressedState)),
     ("未知键不会写入计数", Sync(UnknownKeyIsIgnored)),
+    ("设备路径提取硬件标识", Sync(DevicePathExtractsHardwareId)),
+    ("设备路径缺少硬件标识时退回类名", Sync(DevicePathFallsBackToClass)),
+    ("空设备路径降级为未知", Sync(EmptyDevicePathDegrades)),
     ("稀疏计数向量往返一致", Sync(CountVectorRoundTrips)),
     ("阶段 2 的 Key Map v1 数据仍可读取", LegacyKeyMapRowsRemainReadableAsync),
     ("数据库一分钟写入与绝对快照更新", RepositoryUpsertIsAbsoluteAsync),
@@ -34,6 +37,7 @@ var tests = new (string Name, Func<Task> Run)[]
     ("历史总数量可排除当前分钟", TotalCountCanExcludeCurrentMinuteAsync),
     ("十分钟派生汇总正确", TenMinuteRollupIsCorrectAsync),
     ("十分钟时段序列正确处理范围边缘", TenMinuteSeriesHandlesRangeEdgesAsync),
+    ("时段分钟数据按一天中的位置累加", TimelineMinuteTotalsAggregateByTimeOfDayAsync),
     ("同一分钟重启后继续累计", RecorderResumesCurrentMinuteAsync),
     ("保存瞬时失败会退避重试并最终落盘", RecorderRetriesTransientFailureAsync),
     ("持续保存失败不丢内存数据，恢复后补写", RecorderKeepsDataAfterPersistentFailureAsync),
@@ -350,6 +354,29 @@ static void UnknownKeyIsIgnored()
     Equal(0L, counter.GetSnapshot().TotalCount);
 }
 
+static void DevicePathExtractsHardwareId()
+{
+    const string path = @"\\?\HID#VID_046D&PID_C52B&MI_00#8&1a2b3c4d&0&0000#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}";
+    Equal("VID_046D&PID_C52B", DevicePathLabel.FromPath(path));
+    const string lower = @"\\?\hid#vid_046d&pid_c52b&mi_00#8&1a2b3c4d&0&0000#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}";
+    Equal("VID_046D&PID_C52B", DevicePathLabel.FromPath(lower));
+    // 只有 VID 没有 PID 时不要拼出半截标识。
+    Equal("VID_046D", DevicePathLabel.FromPath(@"\\?\HID#VID_046D#7&abc&0&0000#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}"));
+}
+
+static void DevicePathFallsBackToClass()
+{
+    Equal(@"ROOT\RDP_KBD", DevicePathLabel.FromPath(@"\\?\ROOT#RDP_KBD#0000#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}"));
+    Equal(@"ACPI\VEN_PNP&DEV_0303", DevicePathLabel.FromPath(@"\\?\ACPI#VEN_PNP&DEV_0303#4&1a2b3c4d&0#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}"));
+}
+
+static void EmptyDevicePathDegrades()
+{
+    Equal("未知设备", DevicePathLabel.FromPath(null));
+    Equal("未知设备", DevicePathLabel.FromPath(""));
+    Equal("未知设备", DevicePathLabel.FromPath("   "));
+}
+
 static void CountVectorRoundTrips()
 {
     var counts = new uint[KeyCatalog.Count];
@@ -449,6 +476,33 @@ static async Task TotalCountCanExcludeCurrentMinuteAsync()
         Equal(5UL, await repository.QueryTotalCountAsync());
         Equal(2UL, await repository.QueryTotalCountAsync(currentMinute));
     });
+}
+
+static async Task TimelineMinuteTotalsAggregateByTimeOfDayAsync()
+{
+    await WithRepositoryAsync(async (_, repository) =>
+    {
+        const long baseTime = 1_800_000_000;
+        await repository.UpsertMinuteBucketAsync(
+            new MinuteBucketSnapshot(baseTime, NewCounts((KeyId.A, 2))));
+        await repository.UpsertMinuteBucketAsync(
+            new MinuteBucketSnapshot(baseTime + 60, NewCounts((KeyId.B, 3))));
+        // 第二天的同一分钟：应当累加到「一天中的同一位置」，而不是变成第 1441 个点。
+        await repository.UpsertMinuteBucketAsync(
+            new MinuteBucketSnapshot(baseTime + 86_400, NewCounts((KeyId.C, 5))));
+
+        var totals = await repository.QueryTimeOfDayMinuteTotalsAsync(baseTime, baseTime + 86_400 + 60);
+
+        Equal(1440, totals.Length);
+        Equal(7UL, totals[LocalMinuteIndex(baseTime)]);
+        Equal(3UL, totals[LocalMinuteIndex(baseTime + 60)]);
+    });
+}
+
+static int LocalMinuteIndex(long utcSeconds)
+{
+    var local = DateTimeOffset.FromUnixTimeSeconds(utcSeconds).ToLocalTime();
+    return (local.Hour * 60) + local.Minute;
 }
 
 static async Task TenMinuteRollupIsCorrectAsync()
@@ -1605,6 +1659,7 @@ static async Task UiSettingsFallBackToDefaultsAsync()
               "fontFamily": "   ",
               "fontScale": 9,
               "keyboardColorBasis": "Rainbow",
+              "timelineBucketMinutes": 7,
               "mouseColorBasis": ""
             }
             """);
@@ -1617,6 +1672,8 @@ static async Task UiSettingsFallBackToDefaultsAsync()
         // 认不出的着色基准回到默认值，而不是让热力图整片变空。
         Equal("KeyboardOnly", settings.KeyboardColorBasis);
         Equal("KeyboardAndMouse", settings.MouseColorBasis);
+        // 7 分钟不在阶梯上（不整除 60），回落到默认的 10 分钟一块。
+        Equal(10, settings.TimelineBucketMinutes);
     }
     finally
     {

@@ -33,6 +33,12 @@ public sealed class AppSettings
     public string MouseColorBasis { get; set; } = "KeyboardAndMouse";
 
     /// <summary>
+    /// 时段条每块几分钟。只影响展示粒度：数据层固定是分钟精度，聚合在界面里做。
+    /// 取值必须是 1/2/5/10/15/30/60 之一（都能整除 60，块边界才对得上整点）。
+    /// </summary>
+    public int TimelineBucketMinutes { get; set; } = 10;
+
+    /// <summary>
     /// 热力图使用的键盘配列 id。找不到对应配列时回落到内置 104；
     /// 只影响画法，不影响任何统计口径。
     /// </summary>
@@ -85,6 +91,12 @@ public sealed class AppSettings
         if (!Enum.TryParse<ColorBasis>(MouseColorBasis, ignoreCase: true, out _))
         {
             MouseColorBasis = "KeyboardAndMouse";
+        }
+
+        // 时段粒度只认阶梯上的值：手改成 7 这种会让块边界不对齐整点。
+        if (TimelineBucketMinutes is not (1 or 2 or 5 or 10 or 15 or 30 or 60))
+        {
+            TimelineBucketMinutes = 10;
         }
 
         // 配列 id 只做「非空」检查：具体存不存在由配列库判断，找不到就回落 104。

@@ -307,6 +307,41 @@ public sealed class KeyanaRepository : IDisposable, IMinuteBucketStore
         return result is null or DBNull ? 0UL : checked((ulong)Convert.ToInt64(result, CultureInfo.InvariantCulture));
     }
 
+    /// <summary>
+    /// 按「一天中的分钟位置」汇总输入次数：把区间内所有天的同一分钟相加，返回长度 1440 的数组。
+    ///
+    /// 时段条的粗细（每块几分钟）是纯展示选择，所以数据层只提供最细的一档，
+    /// 由界面按需要聚合——换粒度不需要重新查库，也不会有第二种统计口径。
+    /// </summary>
+    public async Task<ulong[]> QueryTimeOfDayMinuteTotalsAsync(
+        long startUtc,
+        long endUtc,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateRange(startUtc, endUtc);
+        var totals = new ulong[1440];
+
+        await using var connection = await OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT bucket_start_utc, total_count
+            FROM minute_buckets
+            WHERE bucket_start_utc >= $start AND bucket_start_utc < $end;
+            """;
+        command.Parameters.AddWithValue("$start", startUtc);
+        command.Parameters.AddWithValue("$end", endUtc);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            var local = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(0)).ToLocalTime();
+            var index = (local.Hour * 60) + local.Minute;
+            totals[index] = checked(totals[index] + (ulong)reader.GetInt64(1));
+        }
+
+        return totals;
+    }
+
     public async Task<IReadOnlyList<TenMinuteBucketTotal>> QueryTenMinuteTotalsAsync(
         long startUtc,
         long endUtc,
